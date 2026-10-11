@@ -28,4 +28,11 @@
     <button>Open</button>
   </form>
 </details>
+
+<details class="card">
+  <summary>Open on another device</summary>
+  <p class="muted" style="margin-top:8px">Send this full link to the other phone or laptop. It opens the engine there and remembers it. Share it only with your team.</p>
+  <input id="share-link" value="{{ share_link }}" readonly onclick="this.select()">
+  <p><button type="button" class="secondary" onclick="navigator.clipboard.writeText(document.getElementById('share-link').value).then(() => this.textContent = 'Copied')">Copy link</button></p>
+</details>
 {% endblock %}

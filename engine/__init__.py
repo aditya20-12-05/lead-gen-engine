@@ -28,6 +28,14 @@ COUNTRIES = {
 }
 
 
+LOCKED_PAGE = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Private</title><body style="font-family:system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 16px;color:#1f2937">
+<h1 style="font-size:20px">This link is missing its key</h1>
+<p>This is a private tool. Open it with the full secret link, the one that ends in <code>/open/</code> followed by the key.</p>
+<p>On a device where it already opens, the home page has an "Open on another device" box with the full link to copy.</p>
+</body>"""
+
+
 def load_settings(path):
     if path and Path(path).exists():
         return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -120,7 +128,7 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
                 response.set_cookie(ACCESS_COOKIE, key, max_age=400 * 24 * 3600, httponly=True,
                                     secure=request.is_secure, samesite="Lax")
                 return response
-            abort(404)
+            return LOCKED_PAGE, 404, {"Content-Type": "text/html; charset=utf-8"}
         given = request.args.get("key")
         if given is not None and hmac.compare_digest(given.strip(), key):
             args = {k: v for k, v in request.args.items() if k != "key"}
@@ -131,7 +139,7 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
             return response
         if hmac.compare_digest(request.cookies.get(ACCESS_COOKIE, ""), key):
             return None
-        abort(404)
+        return LOCKED_PAGE, 404, {"Content-Type": "text/html; charset=utf-8"}
 
     @app.after_request
     def no_index(response):
@@ -237,7 +245,9 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
         today = date.today()
         soon = [i for i in agenda("0000-01-01", (today + timedelta(days=7)).isoformat())
                 if not i["done"] and (i["kind"] == "task" or (i["end_date"] or i["date"]) >= today.isoformat())]
-        return render_template("overview.html", summary=summary, waiting=waiting, soon=soon)
+        share_link = (request.host_url.rstrip("/") + "/open/" + app.config["ACCESS_KEY"]
+                      if app.config["ACCESS_KEY"] else request.host_url)
+        return render_template("overview.html", summary=summary, waiting=waiting, soon=soon, share_link=share_link)
 
     @app.route("/countries/<code>", methods=["GET", "POST"])
     def country(code):

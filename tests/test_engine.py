@@ -561,6 +561,11 @@ def test_secret_link_gates_every_page(target, tmp_path):
     assert resp.status_code == 302 and resp.headers["Location"].endswith("/calendar")
     assert client.get("/calendar").status_code == 200  # cookie set
     assert client.get("/").headers["X-Robots-Tag"] == "noindex, nofollow"
+    assert "http://localhost/open/s3cret-link" in client.get("/").get_data(as_text=True)  # link for another device
+    stranger = app.test_client()
+    locked = stranger.get("/").get_data(as_text=True)
+    assert "missing its key" in locked and "s3cret-link" not in locked
+    assert "s3cret-link" not in stranger.get("/open/wrong").get_data(as_text=True)
 
 
 # Contact finder
