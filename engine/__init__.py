@@ -125,7 +125,8 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
         fingerprint = hashlib.sha256(key.encode()).hexdigest()[:8] if key else "none"
         return (f"ok | access key set: {'yes' if key else 'no'} (fingerprint {fingerprint}, {len(key or '')} characters)"
                 f" | database: {'postgres' if db.is_postgres_url(app.config['DB_PATH']) else 'sqlite'}"
-                f" | path seen: {request.path}"), 200, {"Content-Type": "text/plain"}
+                f" | path seen: {request.path}"
+                f" | code version: {os.environ.get('VERCEL_GIT_COMMIT_SHA', 'local')[:7]}"), 200, {"Content-Type": "text/plain"}
 
     def conn():
         if "conn" not in g:
