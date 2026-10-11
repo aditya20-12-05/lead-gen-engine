@@ -80,7 +80,8 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
         @app.route("/<path:path>")
         def startup_error(path):
             key = app.config["ACCESS_KEY"]
-            given = request.args.get("key") or request.cookies.get(ACCESS_COOKIE, "")
+            opened = request.path[len("/open/"):].strip("/") if request.path.startswith("/open/") else ""
+            given = (opened or request.args.get("key") or request.cookies.get(ACCESS_COOKIE, "")).strip()
             if key and not hmac.compare_digest(given, key):
                 abort(404)  # details only through the secret link
             return (f"<h1>SELEQT outreach could not start</h1><p>{escape(message)}</p>", 500)
