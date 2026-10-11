@@ -237,7 +237,8 @@ class PgConnection:
     def __init__(self, url):
         import psycopg
 
-        self._conn = psycopg.connect(url, row_factory=_row_factory)
+        # No server-side prepared statements, so connection poolers (Supabase, Neon) work.
+        self._conn = psycopg.connect(url, row_factory=_row_factory, prepare_threshold=None)
 
     def execute(self, sql, params=()):
         translated, returning = translate(sql)
