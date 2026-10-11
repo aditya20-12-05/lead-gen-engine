@@ -16,7 +16,7 @@
       <label>Contact form link</label><input name="contact_form_url" value="{{ org.contact_form_url or '' }}">
       <label>Social media link</label><input name="social_url" value="{{ org.social_url or '' }}">
     </details>
-    <p><button class="secondary">Save</button> <a class="muted" href="{{ org.source_url }}" target="_blank" rel="noopener">source</a></p>
+    <p><button class="secondary">Save</button> {% if org.source_url.startswith('http') %}<a class="muted" href="{{ org.source_url }}" target="_blank" rel="noopener">source</a>{% else %}<span class="muted">source: {{ org.source_url }}</span>{% endif %}</p>
   </div>
   <div class="card">
     <h2 style="margin-top:0">Us</h2>

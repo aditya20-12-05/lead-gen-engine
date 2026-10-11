@@ -17,7 +17,7 @@ from pathlib import Path
 from flask import Flask, abort, flash, g, redirect, render_template, request, url_for
 from markupsafe import escape
 
-from . import db, drafts, finder, importers, mailer, richtext, rules, seed, sources
+from . import db, directory, drafts, finder, importers, mailer, richtext, rules, seed, sources
 
 ACCESS_COOKIE = "seleqt_access"
 
@@ -25,6 +25,7 @@ COUNTRIES = {
     "AE": "UAE", "QA": "Qatar", "OM": "Oman", "BH": "Bahrain", "KW": "Kuwait", "SA": "Saudi Arabia",
     "GB": "UK", "AU": "Australia", "KE": "Kenya", "TZ": "Tanzania", "UG": "Uganda",
     "ZA": "South Africa", "SG": "Singapore", "US": "USA", "CA": "Canada", "NZ": "New Zealand",
+    "DE": "Germany", "HK": "Hong Kong", "MY": "Malaysia", "MU": "Mauritius", "TH": "Thailand",
 }
 
 
@@ -98,6 +99,7 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
             if conn.execute("SELECT count(*) FROM approaches").fetchone()[0] == 0:
                 seed.seed(conn)  # first start on a new database
             seed.apply_contact_updates(conn)
+            directory.apply_directory(conn)
     except Exception as exc:  # show what went wrong rather than crashing the function
         message = f"{type(exc).__name__}: {exc}"
         if db.is_postgres_url(target):

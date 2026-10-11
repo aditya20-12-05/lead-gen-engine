@@ -136,13 +136,35 @@ def test_seed_builds_countries_approaches_and_tasks(conn):
     approaches = {(r["country"], r["name"]) for r in conn.execute("SELECT country, name FROM approaches")}
     assert ("GB", "Weekly newspaper column") in approaches
     assert ("AE", "Community webinars") in approaches
-    brief = conn.execute("SELECT our_brief FROM approaches WHERE country = 'GB'").fetchone()["our_brief"]
+    brief = conn.execute("SELECT our_brief FROM approaches WHERE country = 'GB' AND name = 'Weekly newspaper column'").fetchone()["our_brief"]
     assert "trial piece" in brief and "weekly series" in brief
-    assert conn.execute("SELECT count(*) FROM tasks").fetchone()[0] == 9
+    from engine import directory
+    assert conn.execute("SELECT count(*) FROM tasks").fetchone()[0] == 9 + len(directory.D)
+
+
+def test_directory_adds_bodies_to_their_countries_once(conn):
+    from engine import directory
+    assert len({(d[0], d[1]) for d in directory.D}) == len(directory.D)  # no duplicates left
+    rows = conn.execute(
+        """SELECT g.name, g.country, a.name AS approach FROM tasks t JOIN organisations g ON g.id = t.org_id
+           JOIN approaches a ON a.id = t.approach_id"""
+    ).fetchall()
+    placed = {(r["name"], r["country"]): r["approach"] for r in rows}
+    assert placed[("Gujarati Cultural Association of Utah", "US")] == "Community webinars"  # not Jordan
+    assert placed[("Gujarati Samaj Germany e.V.", "DE")] == "Community webinars"  # a new country
+    assert placed[("Gujarati Samaj Dubai", "AE")] == "Community webinars"
+    de = conn.execute("SELECT * FROM approaches WHERE country = 'DE'").fetchone()
+    assert de["template_kind"] == "community" and "Coming Home" in de["our_brief"]
+    bahrain = conn.execute("SELECT * FROM organisations WHERE name = 'Shri Gujarati Samaj Bahrain'").fetchone()
+    assert bahrain["contact_email"] == "info@shreegujaratisamajbahrain.org" and "Adliya" in bahrain["source_note"]
+    assert conn.execute("SELECT count(*) FROM organisations WHERE name LIKE '%Bahrain%'").fetchone()[0] == 1
+    before = conn.execute("SELECT count(*) FROM tasks").fetchone()[0]
+    assert directory.apply_directory(conn) == 0
+    assert conn.execute("SELECT count(*) FROM tasks").fetchone()[0] == before
 
 
 def test_pages_render(client, conn):
-    gb = conn.execute("SELECT id FROM approaches WHERE country = 'GB'").fetchone()["id"]
+    gb = conn.execute("SELECT id FROM approaches WHERE country = 'GB' AND name = 'Weekly newspaper column'").fetchone()["id"]
     assert client.get(f"/approaches/{gb}").status_code == 302  # approaches live on the country page
     for path in ["/", "/countries/GB", f"/tasks/{task_id(conn, 'Gujarati Samaj UAE')}",
                  "/orgs", f"/orgs/{org_id(conn, 'Gujarati Samaj UAE')}", "/events", "/enquiries", "/dnc"]:
@@ -167,10 +189,10 @@ def test_uk_task_uses_contact_form_when_there_is_no_email(client, conn, app):
 
 
 def test_organisation_with_no_contact_route_needs_contact(client, conn):
-    tid = task_id(conn, "Shri Gujarati Samaj Bahrain")
+    tid = task_id(conn, "Gujarati Association of Victoria")
     assert "needs contact" in client.get(f"/tasks/{tid}").get_data(as_text=True)
     assert make_draft(client, tid, channel="whatsapp") is None
-    client.post(f"/tasks/{tid}", data={"contact_phone": "+973 0000 0000", "source_note": "", "plan": "", "owner": ""})
+    client.post(f"/tasks/{tid}", data={"contact_phone": "+61 0000 0000", "source_note": "", "plan": "", "owner": ""})
     assert make_draft(client, tid, channel="whatsapp") is not None
 
 
@@ -190,7 +212,7 @@ def test_default_sender_and_mailbox_choice(monkeypatch):
 
 
 def test_add_task_with_new_organisation_needs_source(client, conn):
-    gb = conn.execute("SELECT id FROM approaches WHERE country = 'GB'").fetchone()["id"]
+    gb = conn.execute("SELECT id FROM approaches WHERE country = 'GB' AND name = 'Weekly newspaper column'").fetchone()["id"]
     client.post(f"/approaches/{gb}", data={"action": "add_task", "name": "No Source Weekly", "kind": "media"})
     assert conn.execute("SELECT count(*) FROM organisations WHERE name = 'No Source Weekly'").fetchone()[0] == 0
     client.post(f"/approaches/{gb}", data={"action": "add_task", "name": "Leicester Weekly", "kind": "media",
@@ -269,7 +291,7 @@ def test_one_first_email_per_organisation_ever(client, conn):
 
 def test_same_email_in_another_approach_is_still_blocked(client, conn):
     send(client, make_draft(client, task_id(conn, "Gujarati Samaj UAE")))
-    gb = conn.execute("SELECT id FROM approaches WHERE country = 'GB'").fetchone()["id"]
+    gb = conn.execute("SELECT id FROM approaches WHERE country = 'GB' AND name = 'Weekly newspaper column'").fetchone()["id"]
     client.post(f"/approaches/{gb}", data={"action": "add_task", "name": "Same Inbox", "kind": "media",
                                            "source_url": "https://x", "contact_email": "gujaratisamajemirates@gmail.com"})
     assert make_draft(client, task_id(conn, "Same Inbox"), template="blank") is None
@@ -445,7 +467,7 @@ def test_migration_adds_columns_to_old_database(tmp_path):
 
 def test_task_lists_use_the_right_organisation(client, conn):
     client.post("/orgs", data={"name": "Orphan Org", "kind": "media", "country": "GB", "source_url": "https://o"})
-    gb = conn.execute("SELECT id FROM approaches WHERE country = 'GB'").fetchone()["id"]
+    gb = conn.execute("SELECT id FROM approaches WHERE country = 'GB' AND name = 'Weekly newspaper column'").fetchone()["id"]
     client.post(f"/approaches/{gb}", data={"action": "add_task", "name": "Leicester Weekly", "kind": "media",
                                            "source_url": "https://l", "contact_email": "news@leicester.example"})
     tid = task_id(conn, "Leicester Weekly")
@@ -662,7 +684,7 @@ def test_results_count_contacts_outcomes_and_qualified_enquiries(client, conn):
     row = page[page.index("Community webinars"):page.index("</tr>", page.index("Community webinars"))]
     cells = re.findall(r"<td>(?:<strong>)?(\d+)", row)
     # targets, contacted, replied, agreed, live, declined, enquiries, qualified
-    assert cells == ["2", "1", "0", "1", "0", "0", "1", "1"]
+    assert cells == ["3", "1", "0", "1", "0", "0", "1", "1"]  # UAE, Abu Dhabi, Dubai
 
 
 def test_calendar_shows_festivals_task_steps_and_reminders(client, conn):
