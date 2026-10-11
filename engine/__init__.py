@@ -9,6 +9,7 @@ import hmac
 import json
 import os
 import secrets
+import threading
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -32,15 +33,31 @@ def load_settings(path):
     return {}
 
 
-def task_status(c, org):
+def status_context(c):
+    """Everything task statuses depend on, in five queries instead of several per task."""
+    return {
+        "dnc": {(r["kind"], r["value"]) for r in c.execute("SELECT kind, value FROM dnc")},
+        "last_out": {r["org_id"]: r["t"] for r in c.execute(
+            "SELECT org_id, max(sent_at) AS t FROM outreach WHERE sent_at IS NOT NULL GROUP BY org_id")},
+        "last_in": {r["org_id"]: r["t"] for r in c.execute(
+            "SELECT org_id, max(received_at) AS t FROM inbound GROUP BY org_id")},
+        "drafts": {r["org_id"] for r in c.execute(
+            "SELECT DISTINCT org_id FROM outreach WHERE sent_at IS NULL")},
+    }
+
+
+def task_status(c, org, ctx=None):
     """Where a task stands, derived from the guardrails and the email thread."""
-    if rules.dnc_reason(c, email=org["contact_email"], name=org["name"], phone=org["contact_phone"]):
+    ctx = ctx or status_context(c)
+    keys = rules.dnc_keys(org["contact_email"], org["name"], org["contact_phone"])
+    if any(key in ctx["dnc"] for key in keys):
         return "do not contact"
-    if rules.awaiting_our_reply(c, org["id"]):
+    last_in, last_out = ctx["last_in"].get(org["id"]), ctx["last_out"].get(org["id"])
+    if last_in and (last_out is None or last_in > last_out):
         return "reply waiting"
-    if c.execute("SELECT 1 FROM outreach WHERE org_id = ? AND sent_at IS NOT NULL", (org["id"],)).fetchone():
+    if last_out:
         return "sent, awaiting reply"
-    if c.execute("SELECT 1 FROM outreach WHERE org_id = ? AND sent_at IS NULL", (org["id"],)).fetchone():
+    if org["id"] in ctx["drafts"]:
         return "draft"
     if not rules.available_channels(org):
         return "needs contact"
@@ -129,9 +146,19 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
                 f" | path seen: {request.path}"
                 f" | code version: {os.environ.get('VERCEL_GIT_COMMIT_SHA', 'local')[:7]}"), 200, {"Content-Type": "text/plain"}
 
+    shared = threading.local()
+
     def conn():
+        """Postgres: one connection per worker thread, reused across requests (saves the
+        connection handshake on every page). SQLite: a fresh connection per request."""
         if "conn" not in g:
-            g.conn = db.connect(app.config["DB_PATH"])
+            if db.is_postgres_url(app.config["DB_PATH"]):
+                existing = getattr(shared, "conn", None)
+                if existing is None or existing.closed:
+                    shared.conn = db.connect(app.config["DB_PATH"])
+                g.conn = shared.conn
+            else:
+                g.conn = db.connect(app.config["DB_PATH"])
         return g.conn
 
     def settings():
@@ -145,7 +172,11 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
     @app.teardown_appcontext
     def close(_exc):
         c = g.pop("conn", None)
-        if c is not None:
+        if c is None:
+            return
+        if getattr(c, "is_postgres", False):
+            c.rollback()  # end any open transaction; keep the connection for the next request
+        else:
             c.close()
 
     @app.context_processor
@@ -180,10 +211,11 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
                 WHERE {where} ORDER BY g.name""",
             args,
         ).fetchall()
+        ctx = status_context(c) if rows else None
         return [{"task_id": r["task_id"], "owner": r["task_owner"], "outcome": r["task_outcome"],
                  "next_action": r["task_next_action"], "next_action_date": r["task_next_action_date"],
                  "approach_id": r["approach_id"], "approach_name": r["approach_name"],
-                 "org": r, "status": task_status(c, r)} for r in rows]
+                 "org": r, "status": task_status(c, r, ctx)} for r in rows]
 
     # Overview, countries, approaches, tasks
 
@@ -191,13 +223,14 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
     def overview():
         c = conn()
         summary = {}
-        for a in c.execute("SELECT * FROM approaches ORDER BY country, name"):
-            tasks = tasks_for("t.approach_id = ?", (a["id"],))
+        all_tasks = tasks_for("1 = 1", ())
+        for a in c.execute("SELECT * FROM approaches ORDER BY country, name").fetchall():
+            tasks = [t for t in all_tasks if t["approach_id"] == a["id"]]
             entry = summary.setdefault(a["country"], {"approaches": [], "waiting": 0})
             entry["approaches"].append({"approach": a, "count": len(tasks),
                                         "ready": sum(t["status"] == "ready" for t in tasks)})
             entry["waiting"] += sum(t["status"] == "reply waiting" for t in tasks)
-        waiting = [t for t in tasks_for("1 = 1", ()) if t["status"] == "reply waiting"]
+        waiting = [t for t in all_tasks if t["status"] == "reply waiting"]
         today = date.today()
         soon = [i for i in agenda("0000-01-01", (today + timedelta(days=7)).isoformat())
                 if not i["done"] and (i["kind"] == "task" or (i["end_date"] or i["date"]) >= today.isoformat())]
@@ -526,23 +559,29 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
     @app.get("/results")
     def results():
         c = conn()
+        tasks = c.execute("SELECT approach_id, org_id, outcome FROM tasks").fetchall()
+        contacted = {r["org_id"] for r in c.execute(
+            "SELECT DISTINCT org_id FROM outreach WHERE sent_at IS NOT NULL AND kind = 'invite'")}
+        replied = {r["org_id"] for r in c.execute("SELECT DISTINCT org_id FROM inbound")}
+        enquiry_counts = {r["org_id"]: (r["n"], r["q"]) for r in c.execute(
+            """SELECT source_org_id AS org_id, count(*) AS n,
+                      sum(CASE WHEN ticket_fit IN ('lump_sum', 'sip') THEN 1 ELSE 0 END) AS q
+               FROM enquiries WHERE source_org_id IS NOT NULL GROUP BY source_org_id""")}
         rows = []
         for a in c.execute("SELECT * FROM approaches ORDER BY country, name").fetchall():
-            org_ids = [r["org_id"] for r in c.execute("SELECT org_id FROM tasks WHERE approach_id = ?", (a["id"],))]
-            outcomes = [r["outcome"] for r in c.execute("SELECT outcome FROM tasks WHERE approach_id = ?", (a["id"],))]
-            marks = ",".join("?" * len(org_ids)) or "NULL"
-            def count(sql):
-                return c.execute(sql.format(marks=marks), org_ids).fetchone()[0] if org_ids else 0
+            mine = [r for r in tasks if r["approach_id"] == a["id"]]
+            org_ids = {r["org_id"] for r in mine}
+            outcomes = [r["outcome"] for r in mine]
             rows.append({
                 "approach": a,
                 "targets": len(org_ids),
-                "contacted": count("SELECT count(DISTINCT org_id) FROM outreach WHERE sent_at IS NOT NULL AND kind = 'invite' AND org_id IN ({marks})"),
-                "replied": count("SELECT count(DISTINCT org_id) FROM inbound WHERE org_id IN ({marks})"),
+                "contacted": len(org_ids & contacted),
+                "replied": len(org_ids & replied),
                 "agreed": sum(o in ("agreed", "live") for o in outcomes),
                 "live": sum(o == "live" for o in outcomes),
                 "declined": sum(o == "declined" for o in outcomes),
-                "enquiries": count("SELECT count(*) FROM enquiries WHERE source_org_id IN ({marks})"),
-                "qualified": count("SELECT count(*) FROM enquiries WHERE ticket_fit IN ('lump_sum', 'sip') AND source_org_id IN ({marks})"),
+                "enquiries": sum(enquiry_counts.get(o, (0, 0))[0] for o in org_ids),
+                "qualified": sum(enquiry_counts.get(o, (0, 0))[1] or 0 for o in org_ids),
             })
         by_org = c.execute(
             """SELECT g.id, g.name, g.country, count(*) AS enquiries,

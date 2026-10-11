@@ -69,8 +69,8 @@ def email_domain(email):
     return email.split("@", 1)[1] if "@" in email else ""
 
 
-def dnc_reason(conn, *, email=None, name=None, phone=None):
-    """Return the do-not-contact reason if any identifier is listed, else None."""
+def dnc_keys(email=None, name=None, phone=None):
+    """The (kind, value) pairs a do-not-contact entry could match."""
     checks = []
     if email:
         checks.append(("email", normalise_email(email)))
@@ -81,7 +81,12 @@ def dnc_reason(conn, *, email=None, name=None, phone=None):
         checks.append(("name", name.strip().lower()))
     if phone:
         checks.append(("phone", re.sub(r"\D", "", phone)))
-    for kind, value in checks:
+    return checks
+
+
+def dnc_reason(conn, *, email=None, name=None, phone=None):
+    """Return the do-not-contact reason if any identifier is listed, else None."""
+    for kind, value in dnc_keys(email, name, phone):
         row = conn.execute(
             "SELECT reason FROM dnc WHERE kind = ? AND value = ?", (kind, value)
         ).fetchone()
