@@ -12,6 +12,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, url_for
+from markupsafe import escape
 
 from . import db, drafts, finder, importers, mailer, rules, seed, sources
 
@@ -58,12 +59,26 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
         MAILBOX=lambda settings: mailer.mailbox_from_env(settings.get("sender_name", drafts.DEFAULT_SETTINGS["sender_name"])),
         FETCH_PAGE=finder.fetch_page,
     )
-    if not db.is_postgres_url(target):
-        Path(target).parent.mkdir(parents=True, exist_ok=True)
-    with db.connect(app.config["DB_PATH"]) as conn:
-        db.init(conn)
-        if conn.execute("SELECT count(*) FROM approaches").fetchone()[0] == 0:
-            seed.seed(conn)  # first start on a new database
+    try:
+        if os.environ.get("VERCEL") and not db.is_postgres_url(target):
+            raise RuntimeError("DATABASE_URL is not set for this deployment. Add it in Vercel and redeploy.")
+        if not db.is_postgres_url(target):
+            Path(target).parent.mkdir(parents=True, exist_ok=True)
+        with db.connect(app.config["DB_PATH"]) as conn:
+            db.init(conn)
+            if conn.execute("SELECT count(*) FROM approaches").fetchone()[0] == 0:
+                seed.seed(conn)  # first start on a new database
+    except Exception as exc:  # show what went wrong rather than crashing the function
+        message = f"{type(exc).__name__}: {exc}"
+        if db.is_postgres_url(target):
+            message = message.replace(target, "[DATABASE_URL]")
+
+        @app.route("/", defaults={"path": ""})
+        @app.route("/<path:path>")
+        def startup_error(path):
+            return (f"<h1>SELEQT outreach could not start</h1><p>{escape(message)}</p>", 500)
+
+        return app
 
     @app.before_request
     def secret_link():

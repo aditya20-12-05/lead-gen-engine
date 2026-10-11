@@ -6,11 +6,7 @@ source check on the laptop and confirm each contact on the live page before
 sending. Organisational contacts only.
 """
 
-from pathlib import Path
-
 from .db import now
-
-BRIEFS_DIR = Path(__file__).resolve().parent.parent / "briefs"
 
 WEBINAR_BRIEF = """Coming Home: Planning your wealth, your return and your family's future
 
@@ -25,6 +21,47 @@ What it covers:
 Format: about 45 minutes online from India, then questions. Purely educational, no sales content.
 
 How we approach: email the community body only, from the founder. The body decides whether to invite its members. One email per body, no chasing. No follow-up marketing to Gulf attendees; reply only if they write first."""
+
+UK_COLUMN_BRIEF = """# Brief: weekly column pitch to UK Gujarati newspapers
+
+For the team member writing the email. Written in the founder's voice and sent
+from ishit@seleqtwealth.in. One email per newspaper; no chasing if there is no
+reply.
+
+## Who it goes to
+- Garavi Gujarat (Asian Media Group, London): weekly, Gujarati and English, readers include many business owners. Contact via amg.biz/contactus.php.
+- Gujarat Samachar UK and Asian Voice (ABPL, London): weekly, Gujarati and English titles. Contact via abplgroup.com (Contact page).
+
+## What we are asking for
+- Start with one trial piece, so the editor can judge it with no commitment.
+- Make clear that our real interest is a continued weekly series.
+
+## What the column would cover
+- Indian schemes and options available to NRIs, explained simply
+- Wealth transfer and succession across India and the UK
+- Planning the move back to India
+- Other relevant Indian financial schemes and rules readers ask about
+
+## Why the editor should care
+- Practical topics their readers deal with: property and parents in India, inheritance, returning home.
+- Free, written to their word count, deadlines and language (Gujarati or English).
+- Steady weekly content from a family firm with deep roots (SELEQT Private Wealth, Ahmedabad; sister firm Lakhani Investments since 1987).
+
+## Tone
+Warm, respectful and short: a founder writing personally to an editor. Say we
+believe the column would be genuinely attractive to their readers.
+
+## Ask
+- Would they like a trial piece?
+- Who should it go to, and what word count and language do they prefer?
+
+## Guardrails
+- Educational only: no promotion of SELEQT's products or services, no return
+  figures or promises. (UK rules treat promotion of investment services by a
+  firm without FCA authorisation as a criminal offence.)
+- "Schemes" means explaining rules and options in general, never recommending
+  a specific fund or product.
+- House style: no em or en dashes, SELEQT always in capitals."""
 
 AU_BRIEF = """Offer free educational interviews and columns to Gujarati media in Australia on planning the move back to India, succession and wealth transfer.
 
@@ -130,7 +167,7 @@ APPROACHES = [
     {"country": "BH", "name": "Community webinars", "template_kind": "community", "status": "active",
      "brief": WEBINAR_BRIEF, "orgs": ["Shri Gujarati Samaj Bahrain"]},
     {"country": "GB", "name": "Weekly newspaper column", "template_kind": None, "status": "active",
-     "brief_file": "uk_newspaper_weekly_column.md",
+     "brief": UK_COLUMN_BRIEF,
      "orgs": ["Garavi Gujarat (Asian Media Group)", "Gujarat Samachar UK and Asian Voice (ABPL)"]},
     {"country": "AU", "name": "Gujarati media interviews and columns", "template_kind": None,
      "status": "planned", "brief": AU_BRIEF, "orgs": ["SBS Gujarati", "Namaskar Gujarat"]},
@@ -138,8 +175,6 @@ APPROACHES = [
 
 
 def _brief(approach):
-    if "brief_file" in approach:
-        return (BRIEFS_DIR / approach["brief_file"]).read_text(encoding="utf-8").strip()
     return approach["brief"]
 
 
