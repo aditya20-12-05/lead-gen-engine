@@ -88,6 +88,7 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
             db.init(conn)
             if conn.execute("SELECT count(*) FROM approaches").fetchone()[0] == 0:
                 seed.seed(conn)  # first start on a new database
+            seed.apply_contact_updates(conn)
     except Exception as exc:  # show what went wrong rather than crashing the function
         message = f"{type(exc).__name__}: {exc}"
         if db.is_postgres_url(target):

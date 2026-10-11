@@ -423,6 +423,30 @@ def test_task_lists_use_the_right_organisation(client, conn):
     assert "news@leicester.example" in row and ">ready<" in row
 
 
+def test_contact_updates_fill_gaps_once_and_keep_site_edits(conn, monkeypatch):
+    monkeypatch.setattr(seed, "CONTACTS_VERSION", "test")
+    monkeypatch.setattr(seed, "CONTACT_UPDATES", [
+        {"name": "SBS Gujarati", "country": "AU", "contact_email": "gujarati@sbs.example",
+         "note": "Contacts checked Oct 2026."},
+        {"name": "Gujarati Samaj UAE", "country": "AE", "contact_email": "new@samaj.example",
+         "was": {"contact_email": "gujaratisamajemirates@gmail.com"}},
+        {"name": "Gujarati Samaj Qatar", "country": "QA", "contact_email": "new@gsq.example",
+         "was": {"contact_email": "old@gsq.example"}},
+    ])
+    seed.apply_contact_updates(conn)
+    sbs = conn.execute("SELECT * FROM organisations WHERE name = 'SBS Gujarati'").fetchone()
+    assert sbs["contact_email"] == "gujarati@sbs.example" and sbs["source_note"].endswith("Contacts checked Oct 2026.")
+    uae = conn.execute("SELECT contact_email FROM organisations WHERE name = 'Gujarati Samaj UAE'").fetchone()
+    assert uae["contact_email"] == "new@samaj.example"  # still the seeded value, so replaced
+    qa = conn.execute("SELECT contact_email FROM organisations WHERE name = 'Gujarati Samaj Qatar'").fetchone()
+    assert qa["contact_email"] == "gujarati.samaj.qatar@gmail.com"  # differs from "was": left alone
+    conn.execute("UPDATE organisations SET contact_email = NULL WHERE name = 'SBS Gujarati'")
+    conn.commit()
+    assert seed.apply_contact_updates(conn) == 0  # runs once per version
+    note = conn.execute("SELECT source_note FROM organisations WHERE name = 'SBS Gujarati'").fetchone()[0]
+    assert note.count("Contacts checked") == 1
+
+
 # Simplified task page: write and send in place
 
 def test_compose_template_save_and_send_on_the_task_page(client, conn, app):

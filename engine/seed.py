@@ -174,6 +174,43 @@ APPROACHES = [
 ]
 
 
+# Contacts found after the first seed. Applied once per CONTACTS_VERSION to new
+# and existing databases. A field is only written when it is empty, or still
+# holds the value we seeded before ("was"), so edits made on the site are kept.
+CONTACTS_VERSION = "1"
+CONTACT_UPDATES = []
+
+CONTACT_FIELDS = ("contact_email", "contact_phone", "contact_form_url", "social_url", "website")
+
+
+def apply_contact_updates(conn):
+    row = conn.execute("SELECT value FROM meta WHERE key = 'contacts_version'").fetchone()
+    if row and row[0] == CONTACTS_VERSION:
+        return 0
+    changed = 0
+    for update in CONTACT_UPDATES:
+        org = conn.execute(
+            "SELECT * FROM organisations WHERE name = ? AND country = ?", (update["name"], update["country"])
+        ).fetchone()
+        if org is None:
+            continue
+        was = update.get("was", {})
+        for field in CONTACT_FIELDS:
+            value = update.get(field)
+            current = org[field]
+            if value and value != current and (not current or current == was.get(field)):
+                conn.execute(f"UPDATE organisations SET {field} = ? WHERE id = ?", (value, org["id"]))
+                changed += 1
+        note = update.get("note")
+        if note and note not in (org["source_note"] or ""):
+            joined = ((org["source_note"] or "").rstrip() + "\n\n" + note).strip()
+            conn.execute("UPDATE organisations SET source_note = ? WHERE id = ?", (joined, org["id"]))
+    conn.execute("DELETE FROM meta WHERE key = 'contacts_version'")
+    conn.execute("INSERT INTO meta (key, value) VALUES ('contacts_version', ?)", (CONTACTS_VERSION,))
+    conn.commit()
+    return changed
+
+
 def _brief(approach):
     return approach["brief"]
 
