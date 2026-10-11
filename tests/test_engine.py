@@ -583,3 +583,11 @@ def test_open_link_sets_access_and_vercel_path_is_restored(target, tmp_path, mon
     assert resp.status_code == 200 and b"Calendar" in resp.data
     resp = vercel.get("/api/index?__path=/healthz&x=1")
     assert b"path seen: /healthz" in resp.data
+
+
+def test_mailbox_test_checks_reading_and_sending(app):
+    box = mailer.SmtpMailbox(MAIL, imap_factory=lambda: FakeIMAP(), smtp_factory=lambda: FakeSMTP([]))
+    assert "reading and sending both work" in box.test()
+    broken = mailer.SmtpMailbox(MAIL, imap_factory=lambda: FakeIMAP(), smtp_factory=lambda: FakeSMTP([], fail=True))
+    with pytest.raises(RuntimeError, match="sending"):
+        broken.test()

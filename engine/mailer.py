@@ -158,15 +158,7 @@ class SmtpMailbox:
     def send(self, to, subject, body, in_reply_to=None):
         config = self.config
         msg = build_message(config, to, subject, body, in_reply_to)
-        if self._smtp_factory:
-            server = self._smtp_factory()
-        elif config.smtp_port == 465:
-            server = smtplib.SMTP_SSL(config.smtp_host, config.smtp_port,
-                                      context=ssl.create_default_context(), timeout=30)
-        else:
-            server = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=30)
-            server.starttls(context=ssl.create_default_context())
-        with server:
+        with self._smtp() as server:
             server.login(config.user, config.password)
             server.send_message(msg)
         if config.sent_folder:
@@ -206,11 +198,31 @@ class SmtpMailbox:
                 pass
         return summary
 
+    def _smtp(self):
+        config = self.config
+        if self._smtp_factory:
+            return self._smtp_factory()
+        if config.smtp_port == 465:
+            return smtplib.SMTP_SSL(config.smtp_host, config.smtp_port,
+                                    context=ssl.create_default_context(), timeout=30)
+        server = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=30)
+        server.starttls(context=ssl.create_default_context())
+        return server
+
     def test(self):
-        imap = self._imap_factory()
-        imap.login(self.config.user, self.config.password)
-        imap.logout()
-        return f"Signed in to {self.user} over IMAP."
+        """Sign in for reading (IMAP) and for sending (SMTP), without sending anything."""
+        try:
+            imap = self._imap_factory()
+            imap.login(self.config.user, self.config.password)
+            imap.logout()
+        except Exception as exc:
+            raise RuntimeError(f"reading mail (IMAP) failed: {exc}") from exc
+        try:
+            with self._smtp() as server:
+                server.login(self.config.user, self.config.password)
+        except Exception as exc:
+            raise RuntimeError(f"reading works, but sending (SMTP) failed: {exc}") from exc
+        return f"Connected to {self.user}: reading and sending both work. Nothing was sent."
 
 
 # Zoho Mail API
