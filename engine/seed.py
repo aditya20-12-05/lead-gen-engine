@@ -177,8 +177,66 @@ APPROACHES = [
 # Contacts found after the first seed. Applied once per CONTACTS_VERSION to new
 # and existing databases. A field is only written when it is empty, or still
 # holds the value we seeded before ("was"), so edits made on the site are kept.
-CONTACTS_VERSION = "1"
-CONTACT_UPDATES = []
+CONTACTS_VERSION = "2"
+_CHECK = ("Contacts added 11 Oct 2026 from search results; the pages could not be opened from the "
+          "engine's server, so open the source in a browser and confirm before sending.")
+CONTACT_UPDATES = [
+    {"name": "Gujarati Samaj UAE", "country": "AE",
+     "contact_phone": "+971 58 506 5502", "social_url": "https://www.instagram.com/gujaratisamajemirates",
+     "note": _CHECK + " WhatsApp +971 58 506 5502 is the Samaj's WhatsApp on its own Linktree "
+     "(linktr.ee/Gujaratisamajemirates); Instagram from the same page; Facebook facebook.com/gujaratisamajuae. "
+     "Current website is gujaratisamajuae.ae (Aug 2026 press release); gujaratisamajinuae.com is older but shows "
+     "the same Gmail. Ignore gujaratisamajuae.com (under construction, different contacts). Active: founded 2022, "
+     "events in Sep 2026."},
+    {"name": "Gujarati Samaj Abu Dhabi", "country": "AE",
+     "contact_phone": "+971 50 641 4126",
+     "note": _CHECK + " Phone +971 50 641 4126 is listed as the Samaj phone on its contact page, but the site "
+     "dates from 2014 and the number may now belong to a former office-bearer. Still active: performed at ISC Abu "
+     "Dhabi India Fest, Dec 2025. Parent body ISC Abu Dhabi, +971 2 673 0066, iscabudhabi.com."},
+    {"name": "Gujarati Samaj Qatar", "country": "QA",
+     "social_url": "https://www.facebook.com/Gujarati.Samaj.Qatar/",
+     "note": _CHECK + " Gmail confirmed by both gsq.org.in and the Facebook page in search results. Also "
+     "Instagram instagram.com/gsqinsta and X twitter.com/Guj_Samaj_Qatar. The phone on the site is the "
+     "president's personal number, so not recorded. Active: 2025 to 2026 team listed."},
+    {"name": "Muscat Gujarati Samaj (Indian Social Club Oman)", "country": "OM",
+     "contact_email": "iscoffice@iscoman.com", "contact_phone": "+968 2470 1347",
+     "note": _CHECK + " The Gujarati wing has no email or phone of its own. Email and phone are the Indian "
+     "Social Club Oman office (iscoman.com/Contact; also indianscmuscat@gmail.com), so write to the club and ask "
+     "it to pass the note to the Gujarati wing. YouTube youtube.com/c/MuscatGujaratiSamajOman. Newest wing "
+     "activity seen is 2022; the club itself is active."},
+    {"name": "Shri Gujarati Samaj Bahrain", "country": "BH",
+     "note": "Searched again 11 Oct 2026: no email, phone, website or social page found. Committee headed by "
+     "Ravi Parekh (no public contact). Registered with Bahrain's Ministry of Social Affairs; newest dated activity "
+     "2018. Next try: the Indian Embassy Bahrain community page (eoibahrain.gov.in/indian-community.php) or the "
+     "Indian Club Bahrain."},
+    {"name": "Garavi Gujarat (Asian Media Group)", "country": "GB",
+     "contact_email": "kalpesh@amg.biz", "contact_phone": "+44 20 7928 1234",
+     "contact_form_url": "https://amg.biz/contact-us/", "social_url": "https://www.facebook.com/garavigujaratuk/",
+     "was": {"contact_form_url": "https://www.amg.biz/contactus.php"},
+     "note": _CHECK + " kalpesh@amg.biz is Kalpesh R Solanki, Group Managing Editor, as listed on the group's "
+     "sister title (asianhospitality.com/contact-us); Executive Editor Shailesh R Solanki is shailesh@amg.biz. "
+     "Deputy Editor Harshvadan Trivedi (amg.biz/key-contacts/garavi-gujarat). Switchboard +44 20 7928 1234; "
+     "Garavi Gujarat House, 1 Silex Street, London SE1 0DW. Also X x.com/gg2net, Instagram "
+     "instagram.com/garavigujaratnews."},
+    {"name": "Gujarat Samachar UK and Asian Voice (ABPL)", "country": "GB",
+     "contact_form_url": "https://www.asian-voice.com/About/Contact-Us",
+     "social_url": "https://www.facebook.com/AsianVoiceNewsweekly/",
+     "note": _CHECK + " No editorial email is readable in search results (the contact page hides them); open "
+     "asian-voice.com/About/Contact-Us in a browser to see them, or call +44 20 7749 4080 and ask for the "
+     "features desk. Address: Harrow Business Centre, 429 to 433 Pinner Road, North Harrow HA1 4HN. "
+     "Do not use editor@gujaratsamachar.com: that is the Ahmedabad daily, not the UK paper. X x.com/asianvoicenews."},
+    {"name": "SBS Gujarati", "country": "AU",
+     "contact_email": "gujarati.program@sbs.com.au", "contact_phone": "1800 500 727",
+     "contact_form_url": "https://www.sbs.com.au/aboutus/contact-us/",
+     "social_url": "https://www.facebook.com/SBSGujarati/",
+     "note": _CHECK + " The programme email appears on the SBS Gujarati Facebook page and podcast listings, not "
+     "yet seen on sbs.com.au itself. Phone 1800 500 727 is SBS's general line. Presenter Sushen Desai (9 Oct 2026 "
+     "episode); live on SBS South Asian, Wednesdays and Fridays 2pm. Very active."},
+    {"name": "Namaskar Gujarat", "country": "AU",
+     "note": "Searched again 11 Oct 2026: no email, phone or contact page found. Editor and publisher Ketan Joshi "
+     "(readwhere.com e-paper listing). Newest dated issue seen is No. 46, June 2022; it may have stopped "
+     "publishing. Low priority until there is sign of 2025 or 2026 activity."},
+]
 
 CONTACT_FIELDS = ("contact_email", "contact_phone", "contact_form_url", "social_url", "website")
 
