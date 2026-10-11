@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Results by channel</h1>
+<p class="muted">Contacted counts first contacts sent. Agreed includes live. Enquiries come from the Enquiries page, attributed to the organisation they came through.</p>
+<table>
+  <tr><th>Country</th><th>Approach</th><th>Targets</th><th>Contacted</th><th>Replied</th><th>Agreed</th><th>Live</th><th>Declined</th><th>Enquiries</th><th>Qualified</th></tr>
+  {% for r in rows %}
+  <tr>
+    <td>{{ countries.get(r.approach.country, r.approach.country) }}</td>
+    <td><a href="{{ url_for('approach', approach_id=r.approach.id) }}">{{ r.approach.name }}</a></td>
+    <td>{{ r.targets }}</td><td>{{ r.contacted }}</td><td>{{ r.replied }}</td><td>{{ r.agreed }}</td>
+    <td>{{ r.live }}</td><td>{{ r.declined }}</td><td>{{ r.enquiries }}</td><td><strong>{{ r.qualified }}</strong></td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted">Qualified means the enquiry meets the minimum: Rs 1 crore lump sum or Rs 1 lakh a month SIP.</p>
+
+<h2>Enquiries by organisation</h2>
+{% if by_org %}
+<table>
+  <tr><th>Organisation</th><th>Country</th><th>Enquiries</th><th>Qualified</th></tr>
+  {% for o in by_org %}<tr><td><a href="{{ url_for('organisation', org_id=o.id) }}">{{ o.name }}</a></td><td>{{ countries.get(o.country, o.country) }}</td><td>{{ o.enquiries }}</td><td>{{ o.qualified }}</td></tr>{% endfor %}
+</table>
+{% else %}<p class="muted">No enquiries attributed to an organisation yet.</p>{% endif %}
+{% if unattributed %}<p class="muted">{{ unattributed }} enquir{{ 'y' if unattributed == 1 else 'ies' }} not linked to an organisation.</p>{% endif %}
+{% endblock %}

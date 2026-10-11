@@ -1,15 +1,21 @@
-"""SELEQT outreach engine: a local web app for the founder's laptop.
+"""SELEQT outreach engine.
 
 Structure: country > approach (a channel with SELEQT's brief) > task (one
 organisation, its brief, the plan and the email thread).
 """
 
+import hmac
 import json
+import os
+import secrets
+from datetime import date, timedelta
 from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, url_for
 
-from . import db, drafts, importers, mailer, rules, sources
+from . import db, drafts, finder, importers, mailer, rules, sources
+
+ACCESS_COOKIE = "seleqt_access"
 
 COUNTRIES = {
     "AE": "UAE", "QA": "Qatar", "OM": "Oman", "BH": "Bahrain", "KW": "Kuwait", "SA": "Saudi Arabia",
@@ -39,19 +45,49 @@ def task_status(c, org):
     return "ready"
 
 
-def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
+def create_app(db_path=None, settings_path="data/settings.json", access_key=None):
+    """Hosted, it reads DATABASE_URL, SELEQT_ACCESS_KEY and SELEQT_SECRET_KEY from the environment."""
     app = Flask(__name__)
+    target = os.environ.get("DATABASE_URL") or db_path or "data/engine.db"
     app.config.update(
-        DB_PATH=str(db_path),
+        DB_PATH=str(target),
         SETTINGS_PATH=settings_path,
-        SECRET_KEY="local-only",
-        MAIL_CONFIG=lambda settings: mailer.MailConfig.from_env(settings.get("sender_name", "")),
-        MAIL_SEND=mailer.send,
-        MAIL_FETCH=mailer.fetch_replies,
+        SECRET_KEY=os.environ.get("SELEQT_SECRET_KEY") or secrets.token_hex(32),
+        ACCESS_KEY=access_key if access_key is not None else os.environ.get("SELEQT_ACCESS_KEY"),
+        MAILBOX=lambda settings: mailer.mailbox_from_env(settings.get("sender_name", drafts.DEFAULT_SETTINGS["sender_name"])),
+        FETCH_PAGE=finder.fetch_page,
     )
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    if not db.is_postgres_url(target):
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
     with db.connect(app.config["DB_PATH"]) as conn:
         db.init(conn)
+
+    @app.before_request
+    def secret_link():
+        """With an access key set, only the secret link (or its cookie) opens the app."""
+        key = app.config["ACCESS_KEY"]
+        if not key or request.path == "/healthz":
+            return None
+        given = request.args.get("key")
+        if given is not None and hmac.compare_digest(given, key):
+            args = {k: v for k, v in request.args.items() if k != "key"}
+            response = redirect(url_for(request.endpoint, **(request.view_args or {}), **args)
+                                if request.endpoint else "/")
+            response.set_cookie(ACCESS_COOKIE, key, max_age=400 * 24 * 3600, httponly=True,
+                                secure=request.is_secure, samesite="Lax")
+            return response
+        if hmac.compare_digest(request.cookies.get(ACCESS_COOKIE, ""), key):
+            return None
+        abort(404)
+
+    @app.after_request
+    def no_index(response):
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        return response
+
+    @app.get("/healthz")
+    def healthz():
+        return "ok"
 
     def conn():
         if "conn" not in g:
@@ -61,8 +97,10 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
     def settings():
         return load_settings(app.config["SETTINGS_PATH"])
 
-    def mail_config():
-        return app.config["MAIL_CONFIG"](settings())
+    def mailbox():
+        if "mailbox" not in app.extensions:
+            app.extensions["mailbox"] = app.config["MAILBOX"](settings())
+        return app.extensions["mailbox"]
 
     @app.teardown_appcontext
     def close(_exc):
@@ -72,8 +110,9 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
 
     @app.context_processor
     def globals_():
-        config = mail_config()
-        return {"countries": COUNTRIES, "mail_user": config.user if config else None, "channels": rules.CHANNELS}
+        box = mailbox()
+        return {"countries": COUNTRIES, "mail_user": box.user if box else None, "channels": rules.CHANNELS,
+                "today": date.today().isoformat()}
 
     def one(sql, args):
         row = conn().execute(sql, args).fetchone()
@@ -94,12 +133,17 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
     def tasks_for(where, args):
         c = conn()
         rows = c.execute(
-            f"""SELECT t.id, t.owner, a.id AS approach_id, a.name AS approach_name, a.country, g.*
+            f"""SELECT g.*, t.id AS task_id, t.owner AS task_owner, t.outcome AS task_outcome,
+                       t.next_action AS task_next_action, t.next_action_date AS task_next_action_date,
+                       a.id AS approach_id, a.name AS approach_name
                 FROM tasks t JOIN approaches a ON a.id = t.approach_id JOIN organisations g ON g.id = t.org_id
                 WHERE {where} ORDER BY g.name""",
             args,
         ).fetchall()
-        return [{"task_id": r["id"], "owner": r["owner"], "org": r, "status": task_status(c, r)} for r in rows]
+        return [{"task_id": r["task_id"], "owner": r["task_owner"], "outcome": r["task_outcome"],
+                 "next_action": r["task_next_action"], "next_action_date": r["task_next_action_date"],
+                 "approach_id": r["approach_id"], "approach_name": r["approach_name"],
+                 "org": r, "status": task_status(c, r)} for r in rows]
 
     # Overview, countries, approaches, tasks
 
@@ -114,8 +158,10 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
                                         "ready": sum(t["status"] == "ready" for t in tasks)})
             entry["waiting"] += sum(t["status"] == "reply waiting" for t in tasks)
         waiting = [t for t in tasks_for("1 = 1", ()) if t["status"] == "reply waiting"]
-        events = c.execute("SELECT * FROM events ORDER BY starts_at").fetchall()
-        return render_template("overview.html", summary=summary, waiting=waiting, events=events)
+        today = date.today()
+        soon = [i for i in agenda("0000-01-01", (today + timedelta(days=7)).isoformat())
+                if not i["done"] and (i["kind"] == "task" or (i["end_date"] or i["date"]) >= today.isoformat())]
+        return render_template("overview.html", summary=summary, waiting=waiting, soon=soon)
 
     @app.route("/countries/<code>", methods=["GET", "POST"])
     def country(code):
@@ -198,9 +244,14 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
         t = get_task(task_id)
         org = get_org(t["org_id"])
         if request.method == "POST":
+            outcome = request.form.get("outcome", "open")
+            if outcome not in ("open", "agreed", "live", "declined"):
+                abort(400)
             c.execute(
-                "UPDATE tasks SET plan = ?, owner = ? WHERE id = ?",
-                (request.form.get("plan", "").strip(), request.form.get("owner", "").strip(), task_id),
+                "UPDATE tasks SET plan = ?, owner = ?, outcome = ?, next_action = ?, next_action_date = ? WHERE id = ?",
+                (request.form.get("plan", "").strip(), request.form.get("owner", "").strip(), outcome,
+                 request.form.get("next_action", "").strip() or None,
+                 request.form.get("next_action_date", "").strip() or None, task_id),
             )
             c.execute(
                 """UPDATE organisations SET contact_email = ?, contact_phone = ?, contact_form_url = ?,
@@ -224,6 +275,9 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
         ).fetchall()
         return render_template(
             "task.html", t=t, org=org, thread=thread, status=task_status(c, org),
+            suggestions=c.execute(
+                "SELECT * FROM contact_suggestions WHERE org_id = ? AND status = 'new' ORDER BY kind", (org["id"],)
+            ).fetchall(),
             usable=rules.available_channels(org),
             templates=drafts.templates_for(t["template_kind"]) if t["template_kind"] else {},
         )
@@ -293,11 +347,11 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
         c = conn()
         row = one("SELECT * FROM outreach WHERE id = ?", (outreach_id,))
         org = get_org(row["org_id"])
-        config = mail_config()
+        box = mailbox()
         try:
             if row["channel"] != "email":
                 raise rules.RuleViolation("Only emails can be sent from the engine; record other channels as sent.")
-            if config is None:
+            if box is None:
                 raise rules.RuleViolation("The mailbox is not connected.")
             if request.form.get("reviewed") != "yes":
                 raise rules.RuleViolation("Tick the box to confirm you have read the email before sending.")
@@ -311,8 +365,7 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
                     "ORDER BY received_at DESC LIMIT 1", (org["id"],)
                 ).fetchone()
                 in_reply_to = last["message_id"] if last else None
-            msg = mailer.build_message(config, org["contact_email"], row["subject"], row["body"], in_reply_to)
-            message_id = app.config["MAIL_SEND"](config, msg)
+            message_id = box.send(org["contact_email"], row["subject"], row["body"], in_reply_to)
         except rules.RuleViolation as exc:
             flash(str(exc), "error")
             return redirect(url_for("outreach", outreach_id=outreach_id))
@@ -321,10 +374,10 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
             return redirect(url_for("outreach", outreach_id=outreach_id))
         c.execute(
             "UPDATE outreach SET sent_at = ?, sent_by = ?, message_id = ? WHERE id = ?",
-            (db.now(), config.user, message_id, outreach_id),
+            (db.now(), box.user, message_id, outreach_id),
         )
         c.commit()
-        flash(f"Sent from {config.user}.", "ok")
+        flash(f"Sent from {box.user}.", "ok")
         return back_to(row)
 
     @app.post("/outreach/<int:outreach_id>/sent")
@@ -358,12 +411,12 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
 
     @app.post("/mail/check")
     def check_mail():
-        config = mail_config()
-        if config is None:
+        box = mailbox()
+        if box is None:
             flash("The mailbox is not connected.", "error")
         else:
             try:
-                result = app.config["MAIL_FETCH"](conn(), config)
+                result = box.fetch_replies(conn())
                 message = f"{result['new']} new repl{'y' if result['new'] == 1 else 'ies'}."
                 if result["opt_outs"]:
                     message += " Added to do not contact: " + ", ".join(result["opt_outs"]) + "."
@@ -388,6 +441,120 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
             c.commit()
             flash("Message logged.", "ok")
         return redirect(request.form.get("next") or url_for("organisation", org_id=org_id))
+
+    @app.post("/mail/test")
+    def test_mail():
+        box = mailbox()
+        if box is None:
+            flash("The mailbox is not connected.", "error")
+        else:
+            try:
+                flash(box.test(), "ok")
+            except Exception as exc:
+                flash(f"Mailbox test failed: {exc}", "error")
+        return redirect(url_for("overview"))
+
+    # Contact finder
+
+    @app.post("/orgs/<int:org_id>/find-contacts")
+    def find_contacts(org_id):
+        org = get_org(org_id)
+        result = finder.run_for_org(conn(), org, app.config["FETCH_PAGE"])
+        message = f"Found {result['added']} new contact detail{'' if result['added'] == 1 else 's'}."
+        if result["errors"]:
+            message += " Could not read: " + "; ".join(result["errors"][:3])
+        flash(message, "ok" if result["added"] or not result["errors"] else "error")
+        return redirect(request.form.get("next") or url_for("organisation", org_id=org_id))
+
+    @app.post("/suggestions/<int:suggestion_id>")
+    def use_suggestion(suggestion_id):
+        c = conn()
+        s = one("SELECT * FROM contact_suggestions WHERE id = ?", (suggestion_id,))
+        action = request.form.get("action")
+        if action == "use":
+            field = finder.FIELD_FOR_KIND[s["kind"]]
+            value = rules.normalise_email(s["value"]) if s["kind"] == "email" else s["value"]
+            c.execute(f"UPDATE organisations SET {field} = ? WHERE id = ?", (value, s["org_id"]))
+            c.execute("UPDATE contact_suggestions SET status = 'used' WHERE id = ?", (suggestion_id,))
+        elif action == "ignore":
+            c.execute("UPDATE contact_suggestions SET status = 'ignored' WHERE id = ?", (suggestion_id,))
+        c.commit()
+        return redirect(request.form.get("next") or url_for("organisation", org_id=s["org_id"]))
+
+    # Results by channel
+
+    @app.get("/results")
+    def results():
+        c = conn()
+        rows = []
+        for a in c.execute("SELECT * FROM approaches ORDER BY country, name").fetchall():
+            org_ids = [r["org_id"] for r in c.execute("SELECT org_id FROM tasks WHERE approach_id = ?", (a["id"],))]
+            outcomes = [r["outcome"] for r in c.execute("SELECT outcome FROM tasks WHERE approach_id = ?", (a["id"],))]
+            marks = ",".join("?" * len(org_ids)) or "NULL"
+            def count(sql):
+                return c.execute(sql.format(marks=marks), org_ids).fetchone()[0] if org_ids else 0
+            rows.append({
+                "approach": a,
+                "targets": len(org_ids),
+                "contacted": count("SELECT count(DISTINCT org_id) FROM outreach WHERE sent_at IS NOT NULL AND kind = 'invite' AND org_id IN ({marks})"),
+                "replied": count("SELECT count(DISTINCT org_id) FROM inbound WHERE org_id IN ({marks})"),
+                "agreed": sum(o in ("agreed", "live") for o in outcomes),
+                "live": sum(o == "live" for o in outcomes),
+                "declined": sum(o == "declined" for o in outcomes),
+                "enquiries": count("SELECT count(*) FROM enquiries WHERE source_org_id IN ({marks})"),
+                "qualified": count("SELECT count(*) FROM enquiries WHERE ticket_fit IN ('lump_sum', 'sip') AND source_org_id IN ({marks})"),
+            })
+        by_org = c.execute(
+            """SELECT g.id, g.name, g.country, count(*) AS enquiries,
+                      sum(CASE WHEN e.ticket_fit IN ('lump_sum', 'sip') THEN 1 ELSE 0 END) AS qualified
+               FROM enquiries e JOIN organisations g ON g.id = e.source_org_id
+               GROUP BY g.id, g.name, g.country ORDER BY count(*) DESC"""
+        ).fetchall()
+        unattributed = c.execute("SELECT count(*) FROM enquiries WHERE source_org_id IS NULL").fetchone()[0]
+        return render_template("results.html", rows=rows, by_org=by_org, unattributed=unattributed)
+
+    # Calendar and reminders
+
+    def agenda(start, end):
+        c = conn()
+        items = []
+        for r in c.execute(
+            """SELECT * FROM calendar_items
+               WHERE coalesce(end_date, date) >= ? AND date <= ? ORDER BY date""", (start, end)
+        ):
+            items.append({"date": r["date"], "end_date": r["end_date"], "title": r["title"], "kind": r["kind"],
+                          "note": r["note"], "id": r["id"], "done": r["done"], "task_id": r["task_id"]})
+        for t in tasks_for("t.next_action_date IS NOT NULL AND t.next_action_date <= ?", (end,)):
+            items.append({"date": t["next_action_date"], "end_date": None, "kind": "task",
+                          "title": f"{t['org']['name']}: {t['next_action'] or 'next step'}",
+                          "note": t["approach_name"], "id": None, "done": 0, "task_id": t["task_id"]})
+        for e in c.execute("SELECT * FROM events WHERE substr(starts_at, 1, 10) BETWEEN ? AND ?", (start, end)):
+            items.append({"date": e["starts_at"][:10], "end_date": None, "kind": "webinar", "title": e["title"],
+                          "note": f"{e['language']}, {e['cohort']}", "id": None, "done": 0, "task_id": None,
+                          "event_id": e["id"]})
+        return sorted(items, key=lambda i: i["date"])
+
+    @app.route("/calendar", methods=["GET", "POST"])
+    def calendar_page():
+        c = conn()
+        if request.method == "POST":
+            f = request.form
+            if f.get("action") == "done":
+                c.execute("UPDATE calendar_items SET done = 1 WHERE id = ?", (f["id"],))
+            elif f.get("date") and f.get("title", "").strip():
+                c.execute(
+                    """INSERT OR IGNORE INTO calendar_items (date, end_date, title, kind, country, note, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (f["date"], f.get("end_date") or None, f["title"].strip(), f.get("kind", "reminder"),
+                     f.get("country") or None, f.get("note", "").strip() or None, db.now()),
+                )
+            else:
+                flash("A calendar item needs a date and a title.", "error")
+            c.commit()
+            return redirect(url_for("calendar_page"))
+        today = date.today()
+        upcoming = agenda((today - timedelta(days=30)).isoformat(), (today + timedelta(days=365)).isoformat())
+        return render_template("calendar.html", items=upcoming)
 
     # Organisations
 
@@ -424,6 +591,9 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
         tasks = tasks_for("t.org_id = ?", (org_id,))
         return render_template(
             "organisation.html", org=org, tasks=tasks,
+            suggestions=c.execute(
+                "SELECT * FROM contact_suggestions WHERE org_id = ? AND status = 'new' ORDER BY kind", (org_id,)
+            ).fetchall(),
             dnc=rules.dnc_reason(c, email=org["contact_email"], name=org["name"]),
         )
 

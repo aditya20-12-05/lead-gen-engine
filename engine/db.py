@@ -1,11 +1,16 @@
-"""SQLite storage. One file on the wealth manager's laptop; nothing leaves it."""
+"""Storage. SQLite for a single computer, Postgres (DATABASE_URL) when hosted.
 
+The app writes SQLite-style SQL ("?" placeholders, INSERT OR IGNORE); the
+Postgres connection translates it, so both backends run the same queries.
+"""
+
+import re
 import sqlite3
 from datetime import datetime, timezone
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS organisations (
-    id INTEGER PRIMARY KEY,
+    id {pk},
     name TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('community', 'employer', 'media')),
     country TEXT NOT NULL,
@@ -24,7 +29,7 @@ CREATE TABLE IF NOT EXISTS organisations (
 -- Country > approach > task. An approach is a channel in one country (for
 -- example "Weekly newspaper column" in the UK) with SELEQT's brief for it.
 CREATE TABLE IF NOT EXISTS approaches (
-    id INTEGER PRIMARY KEY,
+    id {pk},
     country TEXT NOT NULL,
     name TEXT NOT NULL,
     our_brief TEXT NOT NULL,
@@ -36,17 +41,20 @@ CREATE TABLE IF NOT EXISTS approaches (
 
 -- One task per organisation within an approach.
 CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY,
+    id {pk},
     approach_id INTEGER NOT NULL REFERENCES approaches (id),
     org_id INTEGER NOT NULL REFERENCES organisations (id),
     plan TEXT,
     owner TEXT,
+    outcome TEXT NOT NULL DEFAULT 'open' CHECK (outcome IN ('open', 'agreed', 'live', 'declined')),
+    next_action TEXT,
+    next_action_date TEXT,
     created_at TEXT NOT NULL,
     UNIQUE (approach_id, org_id)
 );
 
 CREATE TABLE IF NOT EXISTS outreach (
-    id INTEGER PRIMARY KEY,
+    id {pk},
     org_id INTEGER NOT NULL REFERENCES organisations (id),
     kind TEXT NOT NULL CHECK (kind IN ('invite', 'reply')),
     language TEXT NOT NULL,
@@ -58,7 +66,7 @@ CREATE TABLE IF NOT EXISTS outreach (
 );
 
 CREATE TABLE IF NOT EXISTS inbound (
-    id INTEGER PRIMARY KEY,
+    id {pk},
     org_id INTEGER NOT NULL REFERENCES organisations (id),
     received_at TEXT NOT NULL,
     channel TEXT NOT NULL,
@@ -67,7 +75,7 @@ CREATE TABLE IF NOT EXISTS inbound (
 
 -- Permanent: the app offers no way to delete rows from this table.
 CREATE TABLE IF NOT EXISTS dnc (
-    id INTEGER PRIMARY KEY,
+    id {pk},
     kind TEXT NOT NULL CHECK (kind IN ('email', 'domain', 'name', 'phone')),
     value TEXT NOT NULL,
     reason TEXT NOT NULL,
@@ -76,7 +84,7 @@ CREATE TABLE IF NOT EXISTS dnc (
 );
 
 CREATE TABLE IF NOT EXISTS events (
-    id INTEGER PRIMARY KEY,
+    id {pk},
     title TEXT NOT NULL,
     starts_at TEXT NOT NULL,
     language TEXT NOT NULL,
@@ -87,7 +95,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE TABLE IF NOT EXISTS registrations (
-    id INTEGER PRIMARY KEY,
+    id {pk},
     event_id INTEGER NOT NULL REFERENCES events (id),
     name TEXT NOT NULL,
     email TEXT NOT NULL,
@@ -100,7 +108,7 @@ CREATE TABLE IF NOT EXISTS registrations (
 );
 
 CREATE TABLE IF NOT EXISTS enquiries (
-    id INTEGER PRIMARY KEY,
+    id {pk},
     name TEXT NOT NULL,
     email TEXT,
     phone TEXT,
@@ -119,24 +127,45 @@ CREATE TABLE IF NOT EXISTS enquiries (
     notes TEXT,
     created_at TEXT NOT NULL
 );
+
+-- Dated items for the calendar: webinars, deadlines, festivals, seasons, reminders.
+CREATE TABLE IF NOT EXISTS calendar_items (
+    id {pk},
+    date TEXT NOT NULL,
+    end_date TEXT,
+    title TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('webinar', 'deadline', 'festival', 'season', 'reminder')),
+    country TEXT,
+    task_id INTEGER REFERENCES tasks (id),
+    note TEXT,
+    done INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE (date, title)
+);
+
+-- Contact details the contact finder found on an organisation's own pages,
+-- waiting for a person to accept or ignore them.
+CREATE TABLE IF NOT EXISTS contact_suggestions (
+    id {pk},
+    org_id INTEGER NOT NULL REFERENCES organisations (id),
+    kind TEXT NOT NULL CHECK (kind IN ('email', 'phone', 'contact_form', 'social')),
+    value TEXT NOT NULL,
+    found_on TEXT NOT NULL,
+    found_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'used', 'ignored')),
+    UNIQUE (org_id, kind, value)
+);
 """
-
-
-def now():
-    # Microseconds keep message order unambiguous when two events share a second.
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
-
-
-def connect(path):
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
 
 
 # Columns added after the first release; added in place on older databases.
 MIGRATIONS = {
     "organisations": {"contact_phone": "TEXT", "contact_form_url": "TEXT", "social_url": "TEXT"},
+    "tasks": {
+        "outcome": "TEXT NOT NULL DEFAULT 'open'",
+        "next_action": "TEXT",
+        "next_action_date": "TEXT",
+    },
     "outreach": {
         "task_id": "INTEGER REFERENCES tasks (id)",
         "message_id": "TEXT",
@@ -151,9 +180,122 @@ MIGRATIONS = {
 }
 
 
+def now():
+    # Microseconds keep message order unambiguous when two events share a second.
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
+class Row(dict):
+    """A result row readable by column name or by position, like sqlite3.Row."""
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
+
+class PgCursor:
+    def __init__(self, cursor, returning):
+        self._cursor = cursor
+        self.rowcount = cursor.rowcount
+        self.lastrowid = None
+        if returning and cursor.description:
+            row = cursor.fetchone()
+            self.lastrowid = row[0] if row else None
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    def __iter__(self):
+        return iter(self._cursor.fetchall())
+
+
+def _row_factory(cursor):
+    names = [d.name for d in cursor.description or []]
+    return lambda values: Row(zip(names, values))
+
+
+def translate(sql):
+    """SQLite dialect to Postgres: placeholders, INSERT OR IGNORE, returned ids."""
+    out = sql.replace("%", "%%").replace("?", "%s")
+    is_insert = re.match(r"\s*INSERT", out, flags=re.IGNORECASE) is not None
+    if re.match(r"\s*INSERT OR IGNORE INTO", out, flags=re.IGNORECASE):
+        out = re.sub(r"INSERT OR IGNORE INTO", "INSERT INTO", out, count=1, flags=re.IGNORECASE)
+        out = out.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+    returning = is_insert and "RETURNING" not in out.upper()
+    if returning:
+        out = out.rstrip().rstrip(";") + " RETURNING id"
+    return out, returning
+
+
+class PgConnection:
+    is_postgres = True
+
+    def __init__(self, url):
+        import psycopg
+
+        self._conn = psycopg.connect(url, row_factory=_row_factory)
+
+    def execute(self, sql, params=()):
+        translated, returning = translate(sql)
+        cursor = self._conn.cursor()
+        try:
+            cursor.execute(translated, tuple(params))
+        except Exception:
+            self._conn.rollback()
+            raise
+        return PgCursor(cursor, returning)
+
+    def executescript(self, script):
+        for statement in script.split(";"):
+            if statement.strip():
+                self._conn.execute(statement)
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, *_):
+        if exc_type is None:
+            self.commit()
+        else:
+            self.rollback()
+        self.close()
+
+
+def is_postgres_url(target):
+    return str(target).startswith(("postgres://", "postgresql://"))
+
+
+def connect(target):
+    if is_postgres_url(target):
+        return PgConnection(str(target))
+    conn = sqlite3.connect(target)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
 def init(conn):
-    conn.executescript(SCHEMA)
+    postgres = getattr(conn, "is_postgres", False)
+    pk = "BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY" if postgres else "INTEGER PRIMARY KEY"
+    conn.executescript(SCHEMA.replace("{pk}", pk))
     for table, columns in MIGRATIONS.items():
+        if postgres:
+            for name, decl in columns.items():
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {decl}")
+            continue
         existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         for name, decl in columns.items():
             if name not in existing:

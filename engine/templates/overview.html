@@ -4,11 +4,26 @@
 <h1>Countries</h1>
 
 {% if mail_user %}
-<form method="post" action="{{ url_for('check_mail') }}" class="card">
-  <button>Check for replies</button>
-  <span class="muted">Reads {{ mail_user }} (read only) for replies from organisations we have emailed.</span>
-</form>
+<div class="card">
+  <form method="post" action="{{ url_for('check_mail') }}" class="inline"><button>Check for replies</button></form>
+  <form method="post" action="{{ url_for('test_mail') }}" class="inline"><button class="secondary">Test mailbox connection</button></form>
+  <span class="muted">Reads {{ mail_user }} for replies from organisations we have emailed; never marks mail as read.</span>
+</div>
 {% endif %}
+
+<h2>This week</h2>
+{% if soon %}
+<table>
+  <tr><th>Date</th><th>What</th><th></th></tr>
+  {% for i in soon %}
+  <tr>
+    <td class="{{ 'bad' if i.kind == 'task' and i.date < today else '' }}">{{ i.date }}{% if i.end_date %} to {{ i.end_date }}{% endif %}</td>
+    <td>{% if i.task_id %}<a href="{{ url_for('task', task_id=i.task_id) }}">{{ i.title }}</a>{% else %}{{ i.title }}{% endif %}{% if i.note %}<br><span class="muted">{{ i.note }}</span>{% endif %}</td>
+    <td><span class="pill">{{ i.kind }}</span></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">Nothing due in the next 7 days.</p>{% endif %}
 
 {% if waiting %}
 <h2>Replies waiting for us ({{ waiting|length }})</h2>
@@ -36,8 +51,4 @@
   <p><button>Open</button></p>
 </form>
 
-{% if events %}
-<h2>Webinars</h2>
-<ul>{% for e in events %}<li><a href="{{ url_for('event', event_id=e.id) }}">{{ e.starts_at }}: {{ e.title }}</a> ({{ e.language }}, {{ e.cohort }})</li>{% endfor %}</ul>
-{% endif %}
 {% endblock %}

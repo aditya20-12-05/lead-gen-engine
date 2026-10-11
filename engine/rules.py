@@ -8,6 +8,8 @@ makes it risky.
 
 import re
 
+from .db import now
+
 # Gulf residents: SELEQT approaches only the community body, and replies only
 # to people who contact it first. No follow-up marketing to attendees.
 NO_FOLLOWUP_COUNTRIES = {"AE", "QA", "OM", "BH", "KW", "SA"}
@@ -102,8 +104,8 @@ def add_dnc(conn, kind, value, reason):
             f"{value} is shared webmail; block the individual email address instead."
         )
     conn.execute(
-        "INSERT OR IGNORE INTO dnc (kind, value, reason, added_at) VALUES (?, ?, ?, datetime('now'))",
-        (kind, value, reason.strip()),
+        "INSERT OR IGNORE INTO dnc (kind, value, reason, added_at) VALUES (?, ?, ?, ?)",
+        (kind, value, reason.strip(), now()),
     )
     conn.commit()
 

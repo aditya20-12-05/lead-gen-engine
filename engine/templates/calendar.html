@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Calendar</h1>
+<p class="muted">Webinars, next steps on tasks, deadlines, festivals and seasons. Festival dates follow the Hindu calendar; confirm them before planning around them.</p>
+<table>
+  <tr><th>Date</th><th>What</th><th>Type</th><th></th></tr>
+  {% for i in items %}
+  <tr style="{{ 'opacity:.5' if i.done or (i.end_date or i.date) < today and i.kind != 'task' else '' }}">
+    <td class="{{ 'bad' if i.kind == 'task' and i.date < today else '' }}">{{ i.date }}{% if i.end_date %} to {{ i.end_date }}{% endif %}</td>
+    <td>
+      {% if i.task_id %}<a href="{{ url_for('task', task_id=i.task_id) }}">{{ i.title }}</a>
+      {% elif i.event_id %}<a href="{{ url_for('event', event_id=i.event_id) }}">{{ i.title }}</a>
+      {% else %}{{ i.title }}{% endif %}
+      {% if i.note %}<br><span class="muted">{{ i.note }}</span>{% endif %}
+    </td>
+    <td><span class="pill">{{ i.kind }}</span></td>
+    <td>{% if i.id and not i.done and i.kind in ('reminder', 'deadline') %}
+      <form method="post" class="inline"><input type="hidden" name="action" value="done"><input type="hidden" name="id" value="{{ i.id }}"><button class="secondary">Done</button></form>
+    {% endif %}</td>
+  </tr>
+  {% else %}<tr><td colspan="4" class="muted">Nothing on the calendar.</td></tr>{% endfor %}
+</table>
+
+<h2>Add to the calendar</h2>
+<form method="post" class="card">
+  <div class="grid">
+    <div><label>Date</label><input type="date" name="date" required></div>
+    <div><label>End date (optional)</label><input type="date" name="end_date"></div>
+    <div><label>Type</label><select name="kind"><option>reminder</option><option>deadline</option><option>festival</option><option>season</option><option>webinar</option></select></div>
+    <div><label>Country (optional)</label><select name="country"><option value="">all</option>{% for code, label in countries.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}</select></div>
+  </div>
+  <label>Title</label><input name="title" required>
+  <label>Note</label><input name="note">
+  <p><button>Add</button></p>
+</form>
+<p class="muted">Next steps set on a task appear here automatically.</p>
+{% endblock %}

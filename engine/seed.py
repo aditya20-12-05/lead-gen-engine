@@ -105,6 +105,21 @@ ORGANISATIONS = [
     },
 ]
 
+# Dates from web search results, October 2026; festival dates follow the Hindu
+# calendar, so confirm against a panchang before planning around them.
+CALENDAR = [
+    ("2026-10-11", "2026-10-20", "Navratri", "festival", None,
+     "Peak season for Gujarati Samaj events abroad (garba, dandiya)."),
+    ("2026-10-20", None, "Dussehra", "festival", None, None),
+    ("2026-11-08", None, "Diwali", "festival", None, "Community bodies hold Diwali events; avoid sending on the day."),
+    ("2026-12-15", "2027-01-31", "NRI winter visit season (approximate)", "season", None,
+     "Many NRIs visit Gujarat for weddings and festivals."),
+    ("2027-01-09", None, "Pravasi Bharatiya Divas", "festival", None, "Observed every year on 9 January."),
+    ("2027-01-10", "2027-01-12", "Vibrant Gujarat Global Summit, Gandhinagar", "festival", None,
+     "11th edition; NRG delegates attend."),
+    ("2027-01-14", None, "Uttarayan", "festival", None, None),
+]
+
 APPROACHES = [
     {"country": "AE", "name": "Community webinars", "template_kind": "community", "status": "active",
      "brief": WEBINAR_BRIEF, "orgs": ["Gujarati Samaj UAE", "Gujarati Samaj Abu Dhabi"]},
@@ -159,5 +174,11 @@ def seed(conn):
                 "INSERT OR IGNORE INTO tasks (approach_id, org_id, created_at) VALUES (?, ?, ?)",
                 (approach_id, org_id, now()),
             )
+    for date, end_date, title, kind, country, note in CALENDAR:
+        conn.execute(
+            """INSERT OR IGNORE INTO calendar_items (date, end_date, title, kind, country, note, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (date, end_date, title, kind, country, note, now()),
+        )
     conn.commit()
     return added

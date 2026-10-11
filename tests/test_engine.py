@@ -1,29 +1,91 @@
 import json
+import os
 from email.message import EmailMessage
 
 import pytest
 
-from engine import create_app, db, drafts, importers, mailer, rules, seed, sources
+from engine import create_app, db, drafts, finder, importers, mailer, rules, seed, sources
 
 SETTINGS = {"sender_name": "Test Founder", "sender_title": "Founder, SELEQT Private Wealth", "footer": "Ahmedabad, India"}
 MAIL = mailer.MailConfig(
     user="ishit@seleqtwealth.in", password="x", smtp_host="smtp.test", smtp_port=465,
     imap_host="imap.test", imap_port=993, sent_folder=None, from_name="Test Founder",
 )
+PG_URL = os.environ.get("TEST_DATABASE_URL")
+
+
+class FakeSMTP:
+    def __init__(self, outbox, fail=False):
+        self.outbox, self.fail = outbox, fail
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def login(self, user, password):
+        if self.fail:
+            raise OSError("connection refused")
+
+    def send_message(self, msg):
+        self.outbox.append(msg)
+
+
+class FakeIMAP:
+    def __init__(self, messages=None):
+        self.messages = messages or []
+
+    def login(self, user, password):
+        pass
+
+    def select(self, mailbox, readonly=False):
+        assert readonly
+        return "OK", [b"1"]
+
+    def search(self, charset, *criteria):
+        sender = criteria[1].strip('"')
+        nums = [str(i + 1).encode() for i, m in enumerate(self.messages) if sender in m["From"].lower()]
+        return "OK", [b" ".join(nums)]
+
+    def fetch(self, num, spec):
+        assert "PEEK" in spec
+        return "OK", [(b"1", self.messages[int(num) - 1].as_bytes())]
+
+    def logout(self):
+        pass
+
+
+def set_mailbox(app, box):
+    app.config["MAILBOX"] = lambda settings: box
+    app.extensions.pop("mailbox", None)
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def target(request, tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    for key in [k for k in os.environ if k.startswith("SELEQT_")]:
+        monkeypatch.delenv(key)
+    if request.param == "sqlite":
+        return str(tmp_path / "engine.db")
+    if not PG_URL:
+        pytest.skip("TEST_DATABASE_URL not set")
+    import psycopg
+
+    with psycopg.connect(PG_URL, autocommit=True) as c:
+        c.execute("DROP SCHEMA public CASCADE")
+        c.execute("CREATE SCHEMA public")
+    return PG_URL
 
 
 @pytest.fixture
-def app(tmp_path):
+def app(target, tmp_path):
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(json.dumps(SETTINGS))
-    app = create_app(tmp_path / "engine.db", settings_path)
-    app.config.update(TESTING=True, MAIL_CONFIG=lambda s: MAIL, SENT=[])
-
-    def fake_send(config, msg):
-        app.config["SENT"].append(msg)
-        return msg["Message-ID"]
-
-    app.config["MAIL_SEND"] = fake_send
+    app = create_app(target, settings_path)
+    app.config.update(TESTING=True, SENT=[], IMAP=FakeIMAP())
+    set_mailbox(app, mailer.SmtpMailbox(MAIL, imap_factory=lambda: app.config["IMAP"],
+                                        smtp_factory=lambda: FakeSMTP(app.config["SENT"])))
     with db.connect(app.config["DB_PATH"]) as conn:
         seed.seed(conn)
     return app
@@ -108,15 +170,19 @@ def test_organisation_with_no_contact_route_needs_contact(client, conn):
     assert make_draft(client, tid, channel="whatsapp") is not None
 
 
-def test_default_sender_is_the_founder():
+def test_default_sender_and_mailbox_choice(monkeypatch):
     assert drafts.DEFAULT_SETTINGS["sender_name"] == "Ishit Lakhani"
-    import os
-    os.environ["SELEQT_MAIL_PASSWORD"] = "x"
-    try:
-        c = mailer.MailConfig.from_env()
-        assert (c.user, c.smtp_host, c.imap_host) == ("ishit@seleqtwealth.in", "smtp.zoho.in", "imap.zoho.in")
-    finally:
-        del os.environ["SELEQT_MAIL_PASSWORD"]
+    for key in [k for k in os.environ if k.startswith("SELEQT_")]:
+        monkeypatch.delenv(key)
+    assert mailer.mailbox_from_env() is None
+    monkeypatch.setenv("SELEQT_MAIL_PASSWORD", "x")
+    box = mailer.mailbox_from_env("Ishit Lakhani")
+    assert isinstance(box, mailer.SmtpMailbox)
+    assert (box.user, box.config.smtp_host, box.config.imap_host) == ("ishit@seleqtwealth.in", "smtp.zoho.in", "imap.zoho.in")
+    for key, value in {"SELEQT_ZOHO_CLIENT_ID": "a", "SELEQT_ZOHO_CLIENT_SECRET": "b", "SELEQT_ZOHO_REFRESH_TOKEN": "c"}.items():
+        monkeypatch.setenv(key, value)
+    box = mailer.mailbox_from_env("Ishit Lakhani")
+    assert isinstance(box, mailer.ZohoMailbox) and box.config.mail_url == "https://mail.zoho.in"
 
 
 def test_add_task_with_new_organisation_needs_source(client, conn):
@@ -176,17 +242,14 @@ def test_send_delivers_from_founder_mailbox_and_records_message_id(client, conn,
 
 
 def test_failed_send_is_not_marked_sent(client, conn, app):
-    def broken(config, msg):
-        raise OSError("connection refused")
-
-    app.config["MAIL_SEND"] = broken
+    set_mailbox(app, mailer.SmtpMailbox(MAIL, smtp_factory=lambda: FakeSMTP([], fail=True)))
     did = make_draft(client, task_id(conn, "Gujarati Samaj UAE"))
     send(client, did)
     assert sent_at(conn, did) is None
 
 
 def test_send_blocked_when_mailbox_not_connected(client, conn, app):
-    app.config["MAIL_CONFIG"] = lambda s: None
+    set_mailbox(app, None)
     did = make_draft(client, task_id(conn, "Gujarati Samaj UAE"))
     send(client, did)
     assert sent_at(conn, did) is None
@@ -221,30 +284,6 @@ def test_dnc_has_no_delete_route(client):
 
 # Catching replies
 
-class FakeIMAP:
-    def __init__(self, messages):
-        self.messages = messages
-
-    def login(self, user, password):
-        pass
-
-    def select(self, mailbox, readonly=False):
-        assert readonly
-        return "OK", [b"1"]
-
-    def search(self, charset, *criteria):
-        sender = criteria[1].strip('"')
-        nums = [str(i + 1).encode() for i, m in enumerate(self.messages) if sender in m["From"].lower()]
-        return "OK", [b" ".join(nums)]
-
-    def fetch(self, num, spec):
-        assert "PEEK" in spec
-        return "OK", [(b"1", self.messages[int(num) - 1].as_bytes())]
-
-    def logout(self):
-        pass
-
-
 def reply(sender, body, message_id="<r1@example.com>", subject="Re: session"):
     m = EmailMessage()
     m["From"], m["To"], m["Subject"], m["Message-ID"] = sender, "ishit@seleqtwealth.in", subject, message_id
@@ -255,9 +294,10 @@ def reply(sender, body, message_id="<r1@example.com>", subject="Re: session"):
 def test_replies_are_caught_once_and_unlock_a_reply_draft(client, conn, app):
     tid = task_id(conn, "Gujarati Samaj UAE")
     send(client, make_draft(client, tid))
-    imap = FakeIMAP([reply("Committee <gujaratisamajemirates@gmail.com>", "Yes, please propose a date in November.")])
-    assert mailer.fetch_replies(conn, MAIL, imap_factory=lambda: imap) == {"new": 1, "opt_outs": []}
-    assert mailer.fetch_replies(conn, MAIL, imap_factory=lambda: imap)["new"] == 0  # no duplicates
+    app.config["IMAP"].messages = [reply("Committee <gujaratisamajemirates@gmail.com>", "Yes, please propose a date in November.")]
+    box = app.config["MAILBOX"](SETTINGS)
+    assert box.fetch_replies(conn) == {"new": 1, "opt_outs": []}
+    assert box.fetch_replies(conn)["new"] == 0  # no duplicates
     rid = make_draft(client, tid, kind="reply")
     assert rid is not None
     client.post(f"/outreach/{rid}", data={"subject": "Re: session", "body": "Thank you. How about 21 November?\n\nTest Founder"})
@@ -266,18 +306,18 @@ def test_replies_are_caught_once_and_unlock_a_reply_draft(client, conn, app):
     assert app.config["SENT"][-1]["In-Reply-To"] == "<r1@example.com>"
 
 
-def test_opt_out_reply_goes_on_do_not_contact(client, conn):
+def test_opt_out_reply_goes_on_do_not_contact(client, conn, app):
     send(client, make_draft(client, task_id(conn, "Gujarati Samaj Qatar")))
-    imap = FakeIMAP([reply("gujarati.samaj.qatar@gmail.com", "Please remove us from your list.")])
-    result = mailer.fetch_replies(conn, MAIL, imap_factory=lambda: imap)
+    app.config["IMAP"].messages = [reply("gujarati.samaj.qatar@gmail.com", "Please remove us from your list.")]
+    result = app.config["MAILBOX"](SETTINGS).fetch_replies(conn)
     assert result["opt_outs"] == ["gujarati.samaj.qatar@gmail.com"]
     assert rules.dnc_reason(conn, email="gujarati.samaj.qatar@gmail.com")
 
 
-def test_mail_from_strangers_is_ignored(conn, client):
+def test_mail_from_strangers_is_ignored(conn, client, app):
     send(client, make_draft(client, task_id(conn, "Gujarati Samaj UAE")))
-    imap = FakeIMAP([reply("someone.else@example.com", "hello")])
-    assert mailer.fetch_replies(conn, MAIL, imap_factory=lambda: imap)["new"] == 0
+    app.config["IMAP"].messages = [reply("someone.else@example.com", "hello")]
+    assert app.config["MAILBOX"](SETTINGS).fetch_replies(conn)["new"] == 0
 
 
 # Registrations and follow-up
@@ -366,3 +406,154 @@ def test_migration_adds_columns_to_old_database(tmp_path):
     cols = {r["name"] for r in old.execute("PRAGMA table_info(inbound)")}
     assert {"task_id", "message_id", "from_addr", "subject"} <= cols
     old.close()
+
+
+# Task lists use the organisation's own id, not the task's
+
+def test_task_lists_use_the_right_organisation(client, conn):
+    client.post("/orgs", data={"name": "Orphan Org", "kind": "media", "country": "GB", "source_url": "https://o"})
+    gb = conn.execute("SELECT id FROM approaches WHERE country = 'GB'").fetchone()["id"]
+    client.post(f"/approaches/{gb}", data={"action": "add_task", "name": "Leicester Weekly", "kind": "media",
+                                           "source_url": "https://l", "contact_email": "news@leicester.example"})
+    tid = task_id(conn, "Leicester Weekly")
+    assert tid != org_id(conn, "Leicester Weekly")
+    page = client.get(f"/approaches/{gb}").get_data(as_text=True)
+    row = page[page.index(f"/tasks/{tid}"):][:400]
+    assert "news@leicester.example" in row and ">ready<" in row
+
+
+# Secret link
+
+def test_secret_link_gates_every_page(target, tmp_path):
+    app = create_app(target, tmp_path / "none.json", access_key="s3cret-link")
+    client = app.test_client()
+    assert client.get("/").status_code == 404
+    assert client.get("/healthz").status_code == 200
+    assert client.get("/?key=wrong").status_code == 404
+    resp = client.get("/calendar?key=s3cret-link")
+    assert resp.status_code == 302 and resp.headers["Location"].endswith("/calendar")
+    assert client.get("/calendar").status_code == 200  # cookie set
+    assert client.get("/").headers["X-Robots-Tag"] == "noindex, nofollow"
+
+
+# Contact finder
+
+PAGES = {
+    "https://samaj.example/": '<a href="/contact-us">Contact</a> <a href="https://www.facebook.com/samaj">FB</a>'
+                              '<a href="https://www.facebook.com/sharer/sharer.php?u=x">share</a> logo@2x.png',
+    "https://samaj.example/contact-us": '<a href="mailto:Committee@Samaj.example?subject=Hi">mail</a>'
+                                        '<a href="tel:+971 4 123 4567">call</a><form action="/send"></form>'
+                                        'Write to info@samaj.example or user@example.com',
+}
+
+
+def test_contact_finder_suggests_and_applies(client, conn, app):
+    oid = org_id(conn, "Gujarati Samaj Qatar")
+    conn.execute("UPDATE organisations SET website = 'https://samaj.example/' WHERE id = ?", (oid,))
+    conn.commit()
+    app.config["FETCH_PAGE"] = lambda url: PAGES[url]
+    client.post(f"/orgs/{oid}/find-contacts")
+    found = {(r["kind"], r["value"]) for r in conn.execute("SELECT kind, value FROM contact_suggestions WHERE org_id = ?", (oid,))}
+    assert found == {("email", "committee@samaj.example"), ("email", "info@samaj.example"),
+                     ("phone", "+971 4 123 4567"), ("social", "https://www.facebook.com/samaj"),
+                     ("contact_form", "https://samaj.example/contact-us")}
+    sid = conn.execute("SELECT id FROM contact_suggestions WHERE kind = 'phone'").fetchone()["id"]
+    client.post(f"/suggestions/{sid}", data={"action": "use"})
+    assert conn.execute("SELECT contact_phone FROM organisations WHERE id = ?", (oid,)).fetchone()[0] == "+971 4 123 4567"
+
+
+def test_contact_finder_reports_unreadable_sites(conn):
+    def down(url):
+        raise OSError("unreachable")
+
+    org = conn.execute("SELECT * FROM organisations WHERE name = 'Gujarati Samaj UAE'").fetchone()
+    result = finder.run_for_org(conn, org, fetch=down)
+    assert result["added"] == 0 and "unreachable" in result["errors"][0]
+
+
+# Results and calendar
+
+def test_results_count_contacts_outcomes_and_qualified_enquiries(client, conn):
+    tid = task_id(conn, "Gujarati Samaj UAE")
+    send(client, make_draft(client, tid))
+    client.post(f"/tasks/{tid}", data={"contact_email": "gujaratisamajemirates@gmail.com", "source_note": "",
+                                        "plan": "", "owner": "", "outcome": "agreed"})
+    enquiry(client, country="AE", ticket_fit="lump_sum", source_org_id=org_id(conn, "Gujarati Samaj UAE"))
+    import re
+
+    page = client.get("/results").get_data(as_text=True)
+    row = page[page.index("Community webinars"):page.index("</tr>", page.index("Community webinars"))]
+    cells = re.findall(r"<td>(?:<strong>)?(\d+)", row)
+    # targets, contacted, replied, agreed, live, declined, enquiries, qualified
+    assert cells == ["2", "1", "0", "1", "0", "0", "1", "1"]
+
+
+def test_calendar_shows_festivals_task_steps_and_reminders(client, conn):
+    from datetime import date, timedelta
+
+    soon = (date.today() + timedelta(days=2)).isoformat()
+    tid = task_id(conn, "Gujarati Samaj UAE")
+    client.post(f"/tasks/{tid}", data={"contact_email": "gujaratisamajemirates@gmail.com", "source_note": "",
+                                        "plan": "", "owner": "", "outcome": "open",
+                                        "next_action": "Propose November date", "next_action_date": soon})
+    client.post("/calendar", data={"date": soon, "title": "Draft first UK column", "kind": "deadline"})
+    calendar = client.get("/calendar").get_data(as_text=True)
+    assert "Diwali" in calendar and "Propose November date" in calendar and "Draft first UK column" in calendar
+    overview = client.get("/").get_data(as_text=True)
+    assert "Propose November date" in overview and "Draft first UK column" in overview
+
+
+# Zoho Mail API
+
+class FakeZoho:
+    def __init__(self, messages=()):
+        self.calls, self.messages = [], list(messages)
+
+    def __call__(self, method, url, data=None, headers=None, form=False):
+        self.calls.append((method, url, data))
+        if url.endswith("/oauth/v2/token"):
+            assert form and data["grant_type"] == "refresh_token"
+            return {"access_token": "tok", "expires_in": 3600}
+        assert headers["Authorization"] == "Zoho-oauthtoken tok"
+        if url.endswith("/api/accounts"):
+            return {"data": [{"accountId": "77", "primaryEmailAddress": "ishit@seleqtwealth.in"}]}
+        if method == "POST":
+            return {"data": {"messageId": "991"}}
+        if "/messages/search" in url:
+            return {"data": self.messages}
+        if url.endswith("/content"):
+            return {"data": {"content": "<div>Yes please.<br>Committee</div>"}}
+        raise AssertionError(url)
+
+
+def zoho_box(http):
+    config = mailer.ZohoConfig("id", "secret", "refresh", "ishit@seleqtwealth.in",
+                               "https://accounts.zoho.in", "https://mail.zoho.in", "Ishit Lakhani")
+    return mailer.ZohoMailbox(config, http=http)
+
+
+def test_zoho_mailbox_sends_and_catches_replies(client, conn, app):
+    import time
+
+    fake = FakeZoho()
+    set_mailbox(app, zoho_box(fake))
+    tid = task_id(conn, "Gujarati Samaj UAE")
+    did = make_draft(client, tid)
+    send(client, did)
+    assert conn.execute("SELECT message_id FROM outreach WHERE id = ?", (did,)).fetchone()[0] == "zoho:991"
+    method, url, payload = fake.calls[-1]
+    assert url == "https://mail.zoho.in/api/accounts/77/messages"
+    assert payload["toAddress"] == "gujaratisamajemirates@gmail.com" and payload["fromAddress"] == "Ishit Lakhani <ishit@seleqtwealth.in>"
+    fake.messages = [{"messageId": "555", "folderId": "1", "subject": "Re: session",
+                      "fromAddress": "gujaratisamajemirates@gmail.com", "receivedTime": str(int(time.time() * 1000) + 5000)},
+                     {"messageId": "556", "folderId": "1", "subject": "old", "fromAddress": "gujaratisamajemirates@gmail.com",
+                      "receivedTime": "1000"}]
+    client.post("/mail/check")
+    replies = conn.execute("SELECT body, message_id FROM inbound").fetchall()
+    assert [(r["body"], r["message_id"]) for r in replies] == [("Yes please.\nCommittee", "zoho:555")]
+    rid = make_draft(client, tid, kind="reply")
+    client.post(f"/outreach/{rid}", data={"subject": "Re: session", "body": "Thank you.\n\nTest Founder"})
+    send(client, rid)
+    assert fake.calls[-1][1] == "https://mail.zoho.in/api/accounts/77/messages/555"
+    assert fake.calls[-1][2]["action"] == "reply"
+    assert sum(1 for c in fake.calls if c[1].endswith("/oauth/v2/token")) == 1  # token reused

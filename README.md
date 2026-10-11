@@ -24,9 +24,21 @@ replies caught from the engine, through Zoho), or website contact form,
 WhatsApp, phone, social media message or in person (sent by a person and
 recorded in the engine).
 
-Other pages: Organisations (all targets and the source check), Webinars
-(sessions and registrations), Enquiries (people who contacted SELEQT first),
-Do not contact.
+Other pages: Calendar (webinars, next steps on tasks, deadlines, festivals and
+the NRI visit season, with this week's items on the front page), Results (per
+country and approach: targets, contacted, replied, agreed, live, declined,
+enquiries and qualified enquiries), Organisations (all targets, the source
+check and the contact finder, which reads an organisation's own website for
+official emails, phones, contact forms and social pages and offers them for a
+person to accept), Webinars, Enquiries, Do not contact.
+
+## Hosting
+
+Runs on SQLite on one computer, or hosted with Postgres (`DATABASE_URL`) so
+every device sees the same data. Hosted, it opens only through a secret link
+(`SELEQT_ACCESS_KEY`), is not indexed by search engines, and sends and reads
+mail through the Zoho Mail API. `render.yaml` and `Dockerfile` describe the
+hosted setup.
 
 ## Rules the engine enforces
 

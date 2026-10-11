@@ -23,4 +23,32 @@
   <label>Notes</label><input name="notes" value="{{ org.notes or '' }}">
   <p><button class="secondary">Save details</button></p>
 </form>
+
+{% if suggestions %}
+<div class="card">
+  <h2 style="margin-top:0">Found on their website</h2>
+  <table>
+    <tr><th>Type</th><th>Detail</th><th>Found on</th><th></th></tr>
+    {% for s in suggestions %}
+    <tr>
+      <td>{{ s.kind.replace('_', ' ') }}</td><td>{{ s.value }}</td>
+      <td><a href="{{ s.found_on }}" target="_blank" rel="noopener" class="muted">page</a></td>
+      <td>
+        <form method="post" action="{{ url_for('use_suggestion', suggestion_id=s.id) }}" class="inline">
+          <input type="hidden" name="next" value="{{ request.path }}">
+          <button name="action" value="use">Use</button>
+          <button name="action" value="ignore" class="secondary">Ignore</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+<form method="post" action="{{ url_for('find_contacts', org_id=org.id) }}" style="margin:8px 0">
+  <input type="hidden" name="next" value="{{ request.path }}">
+  <button class="secondary" {% if not org.website %}disabled title="Add their website first"{% endif %}>Find contact details on their website</button>
+  {% if not org.website %}<span class="muted">Add their website first.</span>{% endif %}
+</form>
+
 {% endblock %}

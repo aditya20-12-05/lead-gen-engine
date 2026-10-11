@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: seleqt-outreach
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m engine seed && gunicorn "engine:create_app()" --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: DATABASE_URL
+        sync: false
+      - key: SELEQT_ACCESS_KEY
+        generateValue: true
+      - key: SELEQT_SECRET_KEY
+        generateValue: true
+      - key: SELEQT_ZOHO_CLIENT_ID
+        sync: false
+      - key: SELEQT_ZOHO_CLIENT_SECRET
+        sync: false
+      - key: SELEQT_ZOHO_REFRESH_TOKEN
+        sync: false

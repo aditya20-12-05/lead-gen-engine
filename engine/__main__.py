@@ -1,6 +1,7 @@
 """Command line: python -m engine {serve,seed,check-sources}."""
 
 import argparse
+import os
 
 from . import create_app, db, seed, sources
 
@@ -16,12 +17,13 @@ def main():
     sub.add_parser("check-sources", help="Fetch every source page and record its status")
     args = parser.parse_args()
 
-    app = create_app(args.db, args.settings)
+    target = os.environ.get("DATABASE_URL") or args.db
+    app = create_app(target, args.settings)
     if args.command == "serve":
         # Bound to localhost: the app is never exposed to the network.
         app.run(host="127.0.0.1", port=args.port)
         return
-    with db.connect(args.db) as conn:
+    with db.connect(target) as conn:
         if args.command == "seed":
             print(f"Added {seed.seed(conn)} organisations.")
         elif args.command == "check-sources":
