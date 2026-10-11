@@ -55,7 +55,7 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
         DB_PATH=str(target),
         SETTINGS_PATH=settings_path,
         SECRET_KEY=os.environ.get("SELEQT_SECRET_KEY") or secrets.token_hex(32),
-        ACCESS_KEY=access_key if access_key is not None else os.environ.get("SELEQT_ACCESS_KEY"),
+        ACCESS_KEY=(access_key if access_key is not None else os.environ.get("SELEQT_ACCESS_KEY", "")).strip() or None,
         MAILBOX=lambda settings: mailer.mailbox_from_env(settings.get("sender_name", drafts.DEFAULT_SETTINGS["sender_name"])),
         FETCH_PAGE=finder.fetch_page,
     )
@@ -91,7 +91,7 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
         if not key or request.path == "/healthz":
             return None
         given = request.args.get("key")
-        if given is not None and hmac.compare_digest(given, key):
+        if given is not None and hmac.compare_digest(given.strip(), key):
             args = {k: v for k, v in request.args.items() if k != "key"}
             response = redirect(url_for(request.endpoint, **(request.view_args or {}), **args)
                                 if request.endpoint else "/")
