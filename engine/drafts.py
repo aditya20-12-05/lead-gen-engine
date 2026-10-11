@@ -86,7 +86,7 @@ Warm regards,
 }
 
 DEFAULT_SETTINGS = {
-    "sender_name": "[Founder name]",
+    "sender_name": "Ishit Lakhani",
     "sender_title": "Founder, SELEQT Private Wealth",
     "footer": "Ahmedabad, India",
 }

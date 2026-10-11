@@ -51,8 +51,8 @@ def org_id(conn, name):
     return conn.execute("SELECT id FROM organisations WHERE name = ?", (name,)).fetchone()["id"]
 
 
-def make_draft(client, tid, kind="invite", template="template", language="en"):
-    resp = client.post(f"/tasks/{tid}/draft", data={"kind": kind, "template": template, "language": language})
+def make_draft(client, tid, kind="invite", template="template", language="en", channel="email"):
+    resp = client.post(f"/tasks/{tid}/draft", data={"kind": kind, "template": template, "language": language, "channel": channel})
     location = resp.headers.get("Location", "")
     return int(location.rsplit("/", 1)[1]) if "/outreach/" in location else None
 
@@ -83,14 +83,40 @@ def test_pages_render(client, conn):
         assert client.get(path).status_code == 200, path
 
 
-def test_uk_task_without_email_cannot_be_drafted_until_email_added(client, conn):
+def test_uk_task_uses_contact_form_when_there_is_no_email(client, conn, app):
     tid = task_id(conn, "Garavi Gujarat (Asian Media Group)")
+    assert make_draft(client, tid, template="blank") is None  # email channel: no email recorded
+    did = make_draft(client, tid, template="blank", channel="contact_form")
+    row = conn.execute("SELECT * FROM outreach WHERE id = ?", (did,)).fetchone()
+    assert row["channel"] == "contact_form" and "Ishit Lakhani" not in row["body"]  # settings file wins
+    assert "Test Founder" in row["body"]
+    client.post(f"/outreach/{did}", data={"subject": "", "body": "Dear Editor, a weekly column offer.\n\nTest Founder"})
+    send(client, did)  # only email can be sent from the engine
+    assert sent_at(conn, did) is None and app.config["SENT"] == []
+    client.post(f"/outreach/{did}/sent", data={"sent_by": "Team member"})
+    assert sent_at(conn, did)
+    # Nobody contacted twice, whatever the channel.
+    client.post(f"/tasks/{tid}", data={"contact_email": "editor@example.co.uk", "source_note": "", "plan": "", "owner": ""})
     assert make_draft(client, tid, template="blank") is None
-    client.post(f"/tasks/{tid}", data={"contact_email": "Editor@Example.co.uk", "source_note": "note", "plan": "", "owner": "Team"})
-    did = make_draft(client, tid, template="blank")
-    assert did is not None
-    body = conn.execute("SELECT body FROM outreach WHERE id = ?", (did,)).fetchone()["body"]
-    assert "[Write your email here]" in body and "Test Founder" in body
+
+
+def test_organisation_with_no_contact_route_needs_contact(client, conn):
+    tid = task_id(conn, "Shri Gujarati Samaj Bahrain")
+    assert "needs contact" in client.get(f"/tasks/{tid}").get_data(as_text=True)
+    assert make_draft(client, tid, channel="whatsapp") is None
+    client.post(f"/tasks/{tid}", data={"contact_phone": "+973 0000 0000", "source_note": "", "plan": "", "owner": ""})
+    assert make_draft(client, tid, channel="whatsapp") is not None
+
+
+def test_default_sender_is_the_founder():
+    assert drafts.DEFAULT_SETTINGS["sender_name"] == "Ishit Lakhani"
+    import os
+    os.environ["SELEQT_MAIL_PASSWORD"] = "x"
+    try:
+        c = mailer.MailConfig.from_env()
+        assert (c.user, c.smtp_host, c.imap_host) == ("ishit@seleqtwealth.in", "smtp.zoho.in", "imap.zoho.in")
+    finally:
+        del os.environ["SELEQT_MAIL_PASSWORD"]
 
 
 def test_add_task_with_new_organisation_needs_source(client, conn):

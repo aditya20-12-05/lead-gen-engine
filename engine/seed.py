@@ -57,6 +57,7 @@ ORGANISATIONS = [
     {
         "name": "Muscat Gujarati Samaj (Indian Social Club Oman)", "kind": "community", "country": "OM",
         "city": "Muscat", "contact_email": None,
+        "social_url": "https://www.facebook.com/muscatgujaratisamajoman/",
         "website": "https://www.facebook.com/muscatgujaratisamajoman/",
         "source_url": "https://www.pressreader.com/oman/oman-daily-observer/20220404/281633898757603",
         "source_note": "Latest dated coverage April 2022 (45th anniversary). No public email found; "
@@ -70,7 +71,8 @@ ORGANISATIONS = [
     },
     {
         "name": "Garavi Gujarat (Asian Media Group)", "kind": "media", "country": "GB", "city": "London",
-        "contact_email": None, "website": "https://www.garavigujarat.biz/",
+        "contact_email": None, "contact_form_url": "https://www.amg.biz/contactus.php",
+        "website": "https://www.garavigujarat.biz/",
         "source_url": "https://www.garavigujarat.biz/about-us/",
         "source_note": "Weekly since 1968, Gujarati and English. About 60,000 copies a week "
         "(ad brokers, undated); the group claims 1.3 million monthly readers across all titles. "
@@ -79,7 +81,8 @@ ORGANISATIONS = [
     },
     {
         "name": "Gujarat Samachar UK and Asian Voice (ABPL)", "kind": "media", "country": "GB",
-        "city": "London", "contact_email": None, "website": "https://www.abplgroup.com/",
+        "city": "London", "contact_email": None, "contact_phone": "+44 20 7749 4080",
+        "website": "https://www.abplgroup.com/",
         "source_url": "https://www.abplgroup.com/",
         "source_note": "Gujarat Samachar UK, weekly since 1972 (Gujarati), and its English sister "
         "Asian Voice; founder and editor CB Patel. Claims 200,000+ weekly readers; Wikipedia cites "
@@ -94,7 +97,8 @@ ORGANISATIONS = [
     },
     {
         "name": "Namaskar Gujarat", "kind": "media", "country": "AU", "city": "Brisbane",
-        "contact_email": None, "website": "https://namaskargujarat.com",
+        "contact_email": None, "social_url": "https://x.com/NamaskarGujarat",
+        "website": "https://namaskargujarat.com",
         "source_url": "https://namaskargujarat.com",
         "source_note": "Calls itself Australia's only Gujarati newspaper; free print and e-paper "
         "in six cities. Latest issue seen April 2023, web headline July 2025; 2026 activity unconfirmed.",
@@ -129,9 +133,11 @@ def seed(conn):
     for org in ORGANISATIONS:
         cur = conn.execute(
             """INSERT OR IGNORE INTO organisations
-               (name, kind, country, city, contact_email, website, source_url, source_note, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (name, kind, country, city, contact_email, contact_phone, contact_form_url, social_url,
+                website, source_url, source_note, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (org["name"], org["kind"], org["country"], org["city"], org["contact_email"],
+             org.get("contact_phone"), org.get("contact_form_url"), org.get("social_url"),
              org["website"], org["source_url"], org["source_note"], now()),
         )
         added += cur.rowcount

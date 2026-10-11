@@ -14,6 +14,9 @@
   <span class="muted">{{ org.source_checked_at or '' }}</span></p>
   <div class="grid">
     <div><label>Official contact email</label><input name="contact_email" value="{{ org.contact_email or '' }}"></div>
+    <div><label>Phone or WhatsApp</label><input name="contact_phone" value="{{ org.contact_phone or '' }}"></div>
+    <div><label>Website contact form</label><input name="contact_form_url" value="{{ org.contact_form_url or '' }}"></div>
+    <div><label>Social media page</label><input name="social_url" value="{{ org.social_url or '' }}"></div>
     <div><label>Website</label><input name="website" value="{{ org.website or '' }}"></div>
   </div>
   <label>Their brief</label><textarea name="source_note" style="min-height:100px">{{ org.source_note or '' }}</textarea>

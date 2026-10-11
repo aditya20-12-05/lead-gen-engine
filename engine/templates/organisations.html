@@ -14,7 +14,7 @@
     <td><a href="{{ url_for('organisation', org_id=o.id) }}">{{ o.name }}</a></td>
     <td>{{ o.kind }}</td>
     <td>{{ countries.get(o.country, o.country) }}{% if o.city %}, {{ o.city }}{% endif %}</td>
-    <td>{{ o.contact_email or '' }}{% if not o.contact_email %}<span class="bad">no email</span>{% endif %}</td>
+    <td>{{ o.contact_email or o.contact_phone or ('contact form' if o.contact_form_url else '') or ('social' if o.social_url else '') }}{% if not (o.contact_email or o.contact_phone or o.contact_form_url or o.social_url) %}<span class="bad">no contact</span>{% endif %}</td>
     <td><a href="{{ o.source_url }}" target="_blank" rel="noopener">source</a></td>
     <td class="{{ 'good' if (o.source_status or '').startswith('ok') else 'bad' }}">{{ o.source_status or 'not checked' }}<br><span class="muted">{{ o.source_checked_at or '' }}</span></td>
   </tr>
@@ -28,7 +28,10 @@
     <div><label>Type</label><select name="kind"><option value="community">Community body</option><option value="employer">Employer (HR)</option><option value="media">Media</option></select></div>
     <div><label>Country</label><select name="country">{% for code, label in countries.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}</select></div>
     <div><label>City</label><input name="city"></div>
-    <div><label>Official contact email (organisational only)</label><input name="contact_email" type="email"></div>
+    <div><label>Official email (organisational only)</label><input name="contact_email" type="email"></div>
+    <div><label>Phone or WhatsApp</label><input name="contact_phone"></div>
+    <div><label>Website contact form</label><input name="contact_form_url"></div>
+    <div><label>Social media page</label><input name="social_url"></div>
     <div><label>Website</label><input name="website"></div>
   </div>
   <label>Source URL (where these details came from, required)</label><input name="source_url" required>

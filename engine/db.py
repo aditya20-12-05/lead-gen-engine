@@ -136,7 +136,12 @@ def connect(path):
 
 # Columns added after the first release; added in place on older databases.
 MIGRATIONS = {
-    "outreach": {"task_id": "INTEGER REFERENCES tasks (id)", "message_id": "TEXT"},
+    "organisations": {"contact_phone": "TEXT", "contact_form_url": "TEXT", "social_url": "TEXT"},
+    "outreach": {
+        "task_id": "INTEGER REFERENCES tasks (id)",
+        "message_id": "TEXT",
+        "channel": "TEXT NOT NULL DEFAULT 'email'",
+    },
     "inbound": {
         "task_id": "INTEGER REFERENCES tasks (id)",
         "message_id": "TEXT",

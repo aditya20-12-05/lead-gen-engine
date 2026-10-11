@@ -8,7 +8,12 @@
 <div class="two">
   <div class="card">
     <h2 style="margin-top:0">Them</h2>
-    <label>Official contact email</label><input name="contact_email" value="{{ org.contact_email or '' }}" placeholder="not found yet">
+    <label>Official email</label><input name="contact_email" value="{{ org.contact_email or '' }}" placeholder="not found yet">
+    <div class="grid">
+      <div><label>Phone or WhatsApp</label><input name="contact_phone" value="{{ org.contact_phone or '' }}"></div>
+      <div><label>Website contact form</label><input name="contact_form_url" value="{{ org.contact_form_url or '' }}"></div>
+      <div><label>Social media page</label><input name="social_url" value="{{ org.social_url or '' }}"></div>
+    </div>
     <label>Their brief</label><textarea name="source_note" style="min-height:140px">{{ org.source_note or '' }}</textarea>
     <p class="muted">Source: <a href="{{ org.source_url }}" target="_blank" rel="noopener">{{ org.source_url }}</a><br>
       Last check: <span class="{{ 'good' if (org.source_status or '').startswith('ok') else 'bad' }}">{{ org.source_status or 'not checked' }}</span> {{ org.source_checked_at or '' }}</p>
@@ -24,42 +29,45 @@
 <p><button class="secondary">Save</button></p>
 </form>
 
-<h2>Email thread</h2>
+<h2>Conversation</h2>
 {% if thread %}
 {% for m in thread %}
 <div class="card" style="{{ 'border-left: 4px solid #1f4e79' if m.dir == 'out' else 'border-left: 4px solid #8a5a00' }}">
-  <p class="muted">{{ 'SELEQT' if m.dir == 'out' else 'Them' }} · {{ m.at }}{% if m.dir == 'out' %} · {% if m.sent_at %}sent by {{ m.sent_by }}{% else %}<span class="bad">draft, not sent</span>{% endif %}{% endif %}</p>
+  <p class="muted">{{ 'SELEQT' if m.dir == 'out' else 'Them' }} · {{ channels[m.channel][1] if m.channel in channels else m.channel }} · {{ m.at }}{% if m.dir == 'out' %} · {% if m.sent_at %}sent by {{ m.sent_by }}{% else %}<span class="bad">draft, not sent</span>{% endif %}{% endif %}</p>
   {% if m.dir == 'out' %}<p><a href="{{ url_for('outreach', outreach_id=m.id) }}"><strong>{{ m.subject or '(no subject yet)' }}</strong></a></p>
   {% else %}<p><strong>{{ m.subject }}</strong></p><pre>{{ m.body }}</pre>{% endif %}
 </div>
 {% endfor %}
-{% else %}<p class="muted">No emails yet.</p>{% endif %}
+{% else %}<p class="muted">No contact yet.</p>{% endif %}
 
 <div class="card">
   {% if status == 'ready' %}
     <form method="post" action="{{ url_for('draft', task_id=t.id) }}">
       <input type="hidden" name="kind" value="invite">
+      <label>First contact by</label>
+      <select name="channel" style="width:auto">{% for ch in usable + ['in_person'] %}<option value="{{ ch }}">{{ channels[ch][1] }}</option>{% endfor %}</select>
       {% if templates %}
         <label>Start the first email from</label>
         <select name="language" style="width:auto">{% for lang, tpl in templates.items() %}<option value="{{ lang }}">{{ tpl.label }}</option>{% endfor %}</select>
         <button name="template" value="template">Use template</button>
         <button name="template" value="blank" class="secondary">Write from blank</button>
       {% else %}
-        <button name="template" value="blank">Write the first email</button>
+        <button name="template" value="blank">Write the first message</button>
         <span class="muted">The team member writes it from the brief.</span>
       {% endif %}
     </form>
   {% elif status == 'reply waiting' %}
     <form method="post" action="{{ url_for('draft', task_id=t.id) }}">
       <input type="hidden" name="kind" value="reply">
+      <select name="channel" style="width:auto">{% for ch in usable + ['in_person'] %}<option value="{{ ch }}">{{ channels[ch][1] }}</option>{% endfor %}</select>
       <button>Write a reply</button>
     </form>
-  {% elif status == 'needs email' %}
-    <p class="bad">Add their official email above before writing.</p>
+  {% elif status == 'needs contact' %}
+    <p class="bad">Add an official email, phone, contact form or social page above before writing.</p>
   {% elif status == 'do not contact' %}
     <p class="bad">On the do-not-contact list. No emails can be written.</p>
   {% elif status == 'sent, awaiting reply' %}
-    <p class="muted">Emailed once. We do not chase; the next step is theirs.</p>
+    <p class="muted">Contacted once. We do not chase; the next step is theirs.</p>
   {% endif %}
   {% if mail_user %}
   <form method="post" action="{{ url_for('check_mail') }}" style="margin-top:12px">

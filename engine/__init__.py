@@ -26,7 +26,7 @@ def load_settings(path):
 
 def task_status(c, org):
     """Where a task stands, derived from the guardrails and the email thread."""
-    if rules.dnc_reason(c, email=org["contact_email"], name=org["name"]):
+    if rules.dnc_reason(c, email=org["contact_email"], name=org["name"], phone=org["contact_phone"]):
         return "do not contact"
     if rules.awaiting_our_reply(c, org["id"]):
         return "reply waiting"
@@ -34,8 +34,8 @@ def task_status(c, org):
         return "sent, awaiting reply"
     if c.execute("SELECT 1 FROM outreach WHERE org_id = ? AND sent_at IS NULL", (org["id"],)).fetchone():
         return "draft"
-    if not org["contact_email"]:
-        return "needs email"
+    if not rules.available_channels(org):
+        return "needs contact"
     return "ready"
 
 
@@ -73,7 +73,7 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
     @app.context_processor
     def globals_():
         config = mail_config()
-        return {"countries": COUNTRIES, "mail_user": config.user if config else None}
+        return {"countries": COUNTRIES, "mail_user": config.user if config else None, "channels": rules.CHANNELS}
 
     def one(sql, args):
         row = conn().execute(sql, args).fetchone()
@@ -162,11 +162,15 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
                         return redirect(url_for("approach", approach_id=approach_id))
                     c.execute(
                         """INSERT OR IGNORE INTO organisations
-                           (name, kind, country, city, contact_email, website, source_url, source_note, created_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           (name, kind, country, city, contact_email, contact_phone, contact_form_url, social_url,
+                            website, source_url, source_note, created_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (request.form["name"].strip(), request.form["kind"], a["country"],
                          request.form.get("city", "").strip(),
                          rules.normalise_email(request.form.get("contact_email")) or None,
+                         request.form.get("contact_phone", "").strip() or None,
+                         request.form.get("contact_form_url", "").strip() or None,
+                         request.form.get("social_url", "").strip() or None,
                          request.form.get("website", "").strip() or None, request.form["source_url"].strip(),
                          request.form.get("source_note", "").strip(), db.now()),
                     )
@@ -199,23 +203,28 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
                 (request.form.get("plan", "").strip(), request.form.get("owner", "").strip(), task_id),
             )
             c.execute(
-                "UPDATE organisations SET contact_email = ?, source_note = ? WHERE id = ?",
+                """UPDATE organisations SET contact_email = ?, contact_phone = ?, contact_form_url = ?,
+                   social_url = ?, source_note = ? WHERE id = ?""",
                 (rules.normalise_email(request.form.get("contact_email")) or None,
+                 request.form.get("contact_phone", "").strip() or None,
+                 request.form.get("contact_form_url", "").strip() or None,
+                 request.form.get("social_url", "").strip() or None,
                  request.form.get("source_note", "").strip(), org["id"]),
             )
             c.commit()
             flash("Saved.", "ok")
             return redirect(url_for("task", task_id=task_id))
         thread = c.execute(
-            """SELECT 'out' AS dir, id, kind, subject, body, coalesce(sent_at, drafted_at) AS at, sent_at, sent_by
-               FROM outreach WHERE org_id = ?
+            """SELECT 'out' AS dir, id, kind, channel, subject, body, coalesce(sent_at, drafted_at) AS at,
+                      sent_at, sent_by FROM outreach WHERE org_id = ?
                UNION ALL
-               SELECT 'in', id, channel, coalesce(subject, ''), body, received_at, received_at, from_addr
+               SELECT 'in', id, 'reply', channel, coalesce(subject, ''), body, received_at, received_at, from_addr
                FROM inbound WHERE org_id = ? ORDER BY at""",
             (org["id"], org["id"]),
         ).fetchall()
         return render_template(
             "task.html", t=t, org=org, thread=thread, status=task_status(c, org),
+            usable=rules.available_channels(org),
             templates=drafts.templates_for(t["template_kind"]) if t["template_kind"] else {},
         )
 
@@ -225,8 +234,9 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
         t = get_task(task_id)
         org = get_org(t["org_id"])
         kind = request.form.get("kind", "invite")
+        channel = request.form.get("channel", "email")
         try:
-            rules.check_can_draft(c, org, kind)
+            rules.check_can_draft(c, org, kind, channel)
             language = request.form.get("language", "en")
             if kind == "reply":
                 last = c.execute(
@@ -241,9 +251,9 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
             flash(str(exc).strip("'\""), "error")
             return redirect(url_for("task", task_id=task_id))
         cur = c.execute(
-            """INSERT INTO outreach (org_id, task_id, kind, language, subject, body, drafted_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (org["id"], task_id, kind, language, subject, body, db.now()),
+            """INSERT INTO outreach (org_id, task_id, kind, channel, language, subject, body, drafted_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (org["id"], task_id, kind, channel, language, subject, body, db.now()),
         )
         c.commit()
         return redirect(url_for("outreach", outreach_id=cur.lastrowid))
@@ -285,8 +295,10 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
         org = get_org(row["org_id"])
         config = mail_config()
         try:
+            if row["channel"] != "email":
+                raise rules.RuleViolation("Only emails can be sent from the engine; record other channels as sent.")
             if config is None:
-                raise rules.RuleViolation("The mailbox is not connected on this computer.")
+                raise rules.RuleViolation("The mailbox is not connected.")
             if request.form.get("reviewed") != "yes":
                 raise rules.RuleViolation("Tick the box to confirm you have read the email before sending.")
             if not row["subject"].strip():
@@ -348,7 +360,7 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
     def check_mail():
         config = mail_config()
         if config is None:
-            flash("The mailbox is not connected on this computer.", "error")
+            flash("The mailbox is not connected.", "error")
         else:
             try:
                 result = app.config["MAIL_FETCH"](conn(), config)
@@ -389,10 +401,13 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
             else:
                 c.execute(
                     """INSERT OR IGNORE INTO organisations
-                       (name, kind, country, city, contact_email, website, source_url, source_note, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       (name, kind, country, city, contact_email, contact_phone, contact_form_url, social_url,
+                        website, source_url, source_note, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (f["name"].strip(), f["kind"], f["country"], f.get("city", "").strip(),
                      rules.normalise_email(f.get("contact_email")) or None,
+                     f.get("contact_phone", "").strip() or None, f.get("contact_form_url", "").strip() or None,
+                     f.get("social_url", "").strip() or None,
                      f.get("website", "").strip() or None, f["source_url"].strip(),
                      f.get("source_note", "").strip(), db.now()),
                 )
@@ -418,8 +433,11 @@ def create_app(db_path="data/engine.db", settings_path="data/settings.json"):
         get_org(org_id)
         f = request.form
         c.execute(
-            "UPDATE organisations SET contact_email = ?, website = ?, source_note = ?, notes = ? WHERE id = ?",
-            (rules.normalise_email(f.get("contact_email")) or None, f.get("website", "").strip() or None,
+            """UPDATE organisations SET contact_email = ?, contact_phone = ?, contact_form_url = ?, social_url = ?,
+               website = ?, source_note = ?, notes = ? WHERE id = ?""",
+            (rules.normalise_email(f.get("contact_email")) or None, f.get("contact_phone", "").strip() or None,
+             f.get("contact_form_url", "").strip() or None, f.get("social_url", "").strip() or None,
+             f.get("website", "").strip() or None,
              f.get("source_note", "").strip(), f.get("notes", "").strip(), org_id),
         )
         c.commit()

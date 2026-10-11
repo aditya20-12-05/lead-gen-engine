@@ -1,14 +1,14 @@
 {% macro status_pill(status) -%}
-<span class="pill {{ 'ready' if status == 'ready' else 'waiting' if status == 'reply waiting' else 'blocked' if status in ('needs email', 'do not contact') else '' }}">{{ status }}</span>
+<span class="pill {{ 'ready' if status == 'ready' else 'waiting' if status == 'reply waiting' else 'blocked' if status in ('needs contact', 'do not contact') else '' }}">{{ status }}</span>
 {%- endmacro %}
 
 {% macro task_table(tasks) -%}
 <table>
-  <tr><th>Organisation</th><th>Email</th><th>Status</th><th>Owner</th></tr>
+  <tr><th>Organisation</th><th>Contact</th><th>Status</th><th>Owner</th></tr>
   {% for t in tasks %}
   <tr>
     <td><a href="{{ url_for('task', task_id=t.task_id) }}">{{ t.org.name }}</a></td>
-    <td>{{ t.org.contact_email or '' }}</td>
+    <td>{{ t.org.contact_email or t.org.contact_phone or ('contact form' if t.org.contact_form_url else '') or ('social' if t.org.social_url else '') }}</td>
     <td>{{ status_pill(t.status) }}</td>
     <td class="muted">{{ t.owner or '' }}</td>
   </tr>

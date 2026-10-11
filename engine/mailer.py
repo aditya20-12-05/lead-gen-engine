@@ -1,16 +1,10 @@
-"""Send email from the founder's mailbox and catch replies, over SMTP and IMAP.
+"""Send email from the founder's Zoho mailbox and catch replies, over SMTP and IMAP.
 
-Credentials come only from environment variables on the laptop, never from a
-file in the repository:
-
-    SELEQT_MAIL_USER       ishit@seleqtwealth.in
-    SELEQT_MAIL_PASSWORD   app password from the mail provider
-    SELEQT_SMTP_HOST       for example smtp.gmail.com or smtp.zoho.in
-    SELEQT_SMTP_PORT       465 (SSL, default) or 587 (STARTTLS)
-    SELEQT_IMAP_HOST       for example imap.gmail.com or imap.zoho.in
-    SELEQT_IMAP_PORT       993 (default)
-    SELEQT_IMAP_SENT       optional: folder to file a copy of sent mail in,
-                           for providers that do not do it automatically
+Defaults are Zoho India (smtp.zoho.in, imap.zoho.in) and ishit@seleqtwealth.in.
+The only required setting is SELEQT_MAIL_PASSWORD, a Zoho app password, read
+from the environment and never stored in the repository. SELEQT_MAIL_USER,
+SELEQT_SMTP_HOST, SELEQT_SMTP_PORT, SELEQT_IMAP_HOST, SELEQT_IMAP_PORT and
+SELEQT_IMAP_SENT override the defaults.
 
 Nothing here sends on its own: send() runs only when a person presses Send on
 a reviewed draft. Reply checks open the inbox read-only and never mark mail
@@ -58,15 +52,14 @@ class MailConfig:
     @classmethod
     def from_env(cls, from_name=""):
         env = os.environ
-        required = ["SELEQT_MAIL_USER", "SELEQT_MAIL_PASSWORD", "SELEQT_SMTP_HOST", "SELEQT_IMAP_HOST"]
-        if any(not env.get(k) for k in required):
+        if not env.get("SELEQT_MAIL_PASSWORD"):
             return None
         return cls(
-            user=env["SELEQT_MAIL_USER"],
+            user=env.get("SELEQT_MAIL_USER", "ishit@seleqtwealth.in"),
             password=env["SELEQT_MAIL_PASSWORD"],
-            smtp_host=env["SELEQT_SMTP_HOST"],
+            smtp_host=env.get("SELEQT_SMTP_HOST", "smtp.zoho.in"),
             smtp_port=int(env.get("SELEQT_SMTP_PORT", "465")),
-            imap_host=env["SELEQT_IMAP_HOST"],
+            imap_host=env.get("SELEQT_IMAP_HOST", "imap.zoho.in"),
             imap_port=int(env.get("SELEQT_IMAP_PORT", "993")),
             sent_folder=env.get("SELEQT_IMAP_SENT") or None,
             from_name=from_name,

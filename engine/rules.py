@@ -37,6 +37,23 @@ WEBMAIL_DOMAINS = {"gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "iclo
 DASHES = {"\u2014": "em dash", "\u2013": "en dash", "\u2012": "figure dash", "\u2015": "horizontal bar"}
 
 
+# How SELEQT can reach an organisation, and the organisation field each needs.
+# Only email can be sent from the engine; the rest are sent by a person and
+# recorded. Every channel counts towards "nobody contacted twice".
+CHANNELS = {
+    "email": ("contact_email", "Email"),
+    "contact_form": ("contact_form_url", "Website contact form"),
+    "whatsapp": ("contact_phone", "WhatsApp"),
+    "phone": ("contact_phone", "Phone call"),
+    "social": ("social_url", "Social media message"),
+    "in_person": (None, "In person"),
+}
+
+
+def available_channels(org):
+    return [key for key, (field, _) in CHANNELS.items() if field and org[field]]
+
+
 class RuleViolation(Exception):
     pass
 
@@ -122,7 +139,7 @@ def copy_issues(text):
 
 
 def org_already_invited(conn, org_id, contact_email):
-    """Nobody contacted twice: one invite per organisation and per address, ever."""
+    """Nobody contacted twice: one first contact per organisation (any channel) and per address, ever."""
     row = conn.execute(
         "SELECT 1 FROM outreach WHERE kind = 'invite' AND sent_at IS NOT NULL AND org_id = ?",
         (org_id,),
@@ -154,14 +171,17 @@ def awaiting_our_reply(conn, org_id):
     return last_out is None or last_in > last_out
 
 
-def check_can_draft(conn, org, kind):
-    reason = dnc_reason(conn, email=org["contact_email"], name=org["name"])
+def check_can_draft(conn, org, kind, channel="email"):
+    reason = dnc_reason(conn, email=org["contact_email"], name=org["name"], phone=org["contact_phone"])
     if reason:
         raise RuleViolation(f"On the do-not-contact list ({reason}).")
-    if not org["contact_email"]:
-        raise RuleViolation("No official contact email recorded for this organisation.")
+    if channel not in CHANNELS:
+        raise RuleViolation(f"Unknown channel {channel}.")
+    field, label = CHANNELS[channel]
+    if field and not org[field]:
+        raise RuleViolation(f"No {label.lower()} contact recorded for this organisation.")
     if kind == "invite" and org_already_invited(conn, org["id"], org["contact_email"]):
-        raise RuleViolation("Already emailed once. Nobody is contacted twice.")
+        raise RuleViolation("Already contacted once. Nobody is contacted twice.")
     if kind == "reply" and not awaiting_our_reply(conn, org["id"]):
         raise RuleViolation("No new message from them to reply to.")
 
@@ -169,7 +189,7 @@ def check_can_draft(conn, org, kind):
 def check_can_mark_sent(conn, outreach_row, org):
     if outreach_row["sent_at"]:
         raise RuleViolation("This draft is already marked as sent.")
-    check_can_draft(conn, org, outreach_row["kind"])
+    check_can_draft(conn, org, outreach_row["kind"], outreach_row["channel"])
     issues = copy_issues(outreach_row["subject"] + "\n" + outreach_row["body"])
     if issues:
         raise RuleViolation("Fix the copy first: " + " ".join(issues))
