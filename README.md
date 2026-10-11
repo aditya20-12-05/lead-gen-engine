@@ -34,11 +34,11 @@ person to accept), Webinars, Enquiries, Do not contact.
 
 ## Hosting
 
-Runs on SQLite on one computer, or hosted with Postgres (`DATABASE_URL`) so
-every device sees the same data. Hosted, it opens only through a secret link
-(`SELEQT_ACCESS_KEY`), is not indexed by search engines, and sends and reads
-mail through the Zoho Mail API. `render.yaml` and `Dockerfile` describe the
-hosted setup.
+Runs on SQLite on one computer, or on Vercel with a Postgres database
+(`DATABASE_URL`, or `POSTGRES_URL` from Vercel's Supabase integration) so every
+device sees the same data. A new database is set up and seeded on first start.
+Hosted, it opens only through a secret link (`SELEQT_ACCESS_KEY`), is not
+indexed by search engines, and sends and reads mail from Ishit's Zoho mailbox.
 
 ## Rules the engine enforces
 

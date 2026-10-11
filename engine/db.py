@@ -275,13 +275,25 @@ class PgConnection:
         self.close()
 
 
+LIBPQ_PARAMS = {"sslmode", "sslrootcert", "connect_timeout", "application_name", "options", "target_session_attrs"}
+
+
+def clean_url(url):
+    """Drop query parameters libpq does not know (Vercel's Supabase URLs add some)."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    parts = urlsplit(url)
+    query = [(k, v) for k, v in parse_qsl(parts.query) if k in LIBPQ_PARAMS]
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
 def is_postgres_url(target):
     return str(target).startswith(("postgres://", "postgresql://"))
 
 
 def connect(target):
     if is_postgres_url(target):
-        return PgConnection(str(target))
+        return PgConnection(clean_url(str(target)))
     conn = sqlite3.connect(target)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")

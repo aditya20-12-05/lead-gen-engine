@@ -13,7 +13,7 @@ from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, url_for
 
-from . import db, drafts, finder, importers, mailer, rules, sources
+from . import db, drafts, finder, importers, mailer, rules, seed, sources
 
 ACCESS_COOKIE = "seleqt_access"
 
@@ -48,7 +48,8 @@ def task_status(c, org):
 def create_app(db_path=None, settings_path="data/settings.json", access_key=None):
     """Hosted, it reads DATABASE_URL, SELEQT_ACCESS_KEY and SELEQT_SECRET_KEY from the environment."""
     app = Flask(__name__)
-    target = os.environ.get("DATABASE_URL") or db_path or "data/engine.db"
+    # DATABASE_URL (Neon) or POSTGRES_URL (Vercel's Supabase integration) when hosted.
+    target = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or db_path or "data/engine.db"
     app.config.update(
         DB_PATH=str(target),
         SETTINGS_PATH=settings_path,
@@ -61,6 +62,8 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
         Path(target).parent.mkdir(parents=True, exist_ok=True)
     with db.connect(app.config["DB_PATH"]) as conn:
         db.init(conn)
+        if conn.execute("SELECT count(*) FROM approaches").fetchone()[0] == 0:
+            seed.seed(conn)  # first start on a new database
 
     @app.before_request
     def secret_link():
