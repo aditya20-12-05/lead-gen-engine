@@ -297,6 +297,22 @@ def check_url(url):
         raise ValueError("The database URL still contains [YOUR-PASSWORD]; put the real password there.")
     if "[" in userinfo or "]" in userinfo:
         raise ValueError("The database URL has square brackets around the password; remove the [ and ].")
+    password = userinfo.partition(":")[2]
+    if any(ch in password for ch in "@/#?"):
+        raise ValueError(
+            "The database password contains @, /, # or ?, which break the URL. "
+            "Reset the database password to letters and numbers only, then update DATABASE_URL."
+        )
+
+
+def redact(message, url):
+    """Remove the password, and any piece of it, from an error message."""
+    userinfo = url.split("://", 1)[-1].rpartition("@")[0]
+    password = userinfo.partition(":")[2]
+    for piece in sorted({password, *re.split(r"[@:/#?]", password)}, key=len, reverse=True):
+        if len(piece) >= 2:
+            message = message.replace(piece, "***")
+    return message.replace(url, "[DATABASE_URL]")
 
 
 def is_postgres_url(target):

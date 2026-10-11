@@ -71,11 +71,15 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
     except Exception as exc:  # show what went wrong rather than crashing the function
         message = f"{type(exc).__name__}: {exc}"
         if db.is_postgres_url(target):
-            message = message.replace(target, "[DATABASE_URL]")
+            message = db.redact(message, target)
 
         @app.route("/", defaults={"path": ""})
         @app.route("/<path:path>")
         def startup_error(path):
+            key = app.config["ACCESS_KEY"]
+            given = request.args.get("key") or request.cookies.get(ACCESS_COOKIE, "")
+            if key and not hmac.compare_digest(given, key):
+                abort(404)  # details only through the secret link
             return (f"<h1>SELEQT outreach could not start</h1><p>{escape(message)}</p>", 500)
 
         return app
