@@ -277,8 +277,8 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
                 org_id = request.form.get("org_id")
                 if not org_id:
                     if not request.form.get("source_url", "").strip() or not request.form.get("name", "").strip():
-                        flash("A new organisation needs a name and the source URL its details came from.", "error")
-                        return redirect(url_for("approach", approach_id=approach_id))
+                        flash("A new organisation needs a name and where its details came from.", "error")
+                        return redirect(url_for("country", code=a["country"]) + f"#approach-{approach_id}")
                     c.execute(
                         """INSERT OR IGNORE INTO organisations
                            (name, kind, country, city, contact_email, contact_phone, contact_form_url, social_url,
@@ -301,15 +301,16 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
                     "INSERT OR IGNORE INTO tasks (approach_id, org_id, created_at) VALUES (?, ?, ?)",
                     (approach_id, org_id, db.now()),
                 )
-                flash("Task added.", "ok")
+                flash("Added.", "ok")
             c.commit()
-            return redirect(url_for("approach", approach_id=approach_id))
-        tasks = tasks_for("t.approach_id = ?", (approach_id,))
-        in_task = {t["org"]["id"] for t in tasks}
-        candidates = [o for o in c.execute(
-            "SELECT id, name FROM organisations WHERE country = ? ORDER BY name", (a["country"],)
-        ) if o["id"] not in in_task]
-        return render_template("approach.html", a=a, tasks=tasks, candidates=candidates)
+            return redirect(url_for("country", code=a["country"]) + f"#approach-{approach_id}")
+        return redirect(url_for("country", code=a["country"]) + f"#approach-{approach_id}")
+
+    def current_draft(org_id):
+        return conn().execute(
+            "SELECT * FROM outreach WHERE org_id = ? AND sent_at IS NULL AND channel = 'email' "
+            "ORDER BY id DESC LIMIT 1", (org_id,)
+        ).fetchone()
 
     @app.route("/tasks/<int:task_id>", methods=["GET", "POST"])
     def task(task_id):
@@ -317,43 +318,114 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
         t = get_task(task_id)
         org = get_org(t["org_id"])
         if request.method == "POST":
-            outcome = request.form.get("outcome", "open")
-            if outcome not in ("open", "agreed", "live", "declined"):
-                abort(400)
-            c.execute(
-                "UPDATE tasks SET plan = ?, owner = ?, outcome = ?, next_action = ?, next_action_date = ? WHERE id = ?",
-                (request.form.get("plan", "").strip(), request.form.get("owner", "").strip(), outcome,
-                 request.form.get("next_action", "").strip() or None,
-                 request.form.get("next_action_date", "").strip() or None, task_id),
-            )
+            f = request.form
+            c.execute("UPDATE tasks SET plan = ? WHERE id = ?", (f.get("plan", t["plan"] or "").strip(), task_id))
+            if "outcome" in f and f["outcome"] in ("open", "agreed", "live", "declined"):
+                c.execute(
+                    "UPDATE tasks SET owner = ?, outcome = ?, next_action = ?, next_action_date = ? WHERE id = ?",
+                    (f.get("owner", "").strip(), f["outcome"], f.get("next_action", "").strip() or None,
+                     f.get("next_action_date", "").strip() or None, task_id),
+                )
             c.execute(
                 """UPDATE organisations SET contact_email = ?, contact_phone = ?, contact_form_url = ?,
                    social_url = ?, source_note = ? WHERE id = ?""",
-                (rules.normalise_email(request.form.get("contact_email")) or None,
-                 request.form.get("contact_phone", "").strip() or None,
-                 request.form.get("contact_form_url", "").strip() or None,
-                 request.form.get("social_url", "").strip() or None,
-                 request.form.get("source_note", "").strip(), org["id"]),
+                (rules.normalise_email(f.get("contact_email")) or None,
+                 f.get("contact_phone", org["contact_phone"] or "").strip() or None,
+                 f.get("contact_form_url", org["contact_form_url"] or "").strip() or None,
+                 f.get("social_url", org["social_url"] or "").strip() or None,
+                 f.get("source_note", "").strip(), org["id"]),
             )
             c.commit()
             flash("Saved.", "ok")
             return redirect(url_for("task", task_id=task_id))
         thread = c.execute(
-            """SELECT 'out' AS dir, id, kind, channel, subject, body, coalesce(sent_at, drafted_at) AS at,
-                      sent_at, sent_by FROM outreach WHERE org_id = ?
+            """SELECT 'out' AS dir, id, kind, channel, subject, body, sent_at AS at, sent_at, sent_by
+               FROM outreach WHERE org_id = ? AND sent_at IS NOT NULL
                UNION ALL
                SELECT 'in', id, 'reply', channel, coalesce(subject, ''), body, received_at, received_at, from_addr
                FROM inbound WHERE org_id = ? ORDER BY at""",
             (org["id"], org["id"]),
         ).fetchall()
+        status = task_status(c, org)
+        draft_row = current_draft(org["id"])
         return render_template(
-            "task.html", t=t, org=org, thread=thread, status=task_status(c, org),
-            suggestions=c.execute(
-                "SELECT * FROM contact_suggestions WHERE org_id = ? AND status = 'new' ORDER BY kind", (org["id"],)
-            ).fetchall(),
-            usable=rules.available_channels(org),
+            "task.html", t=t, org=org, thread=thread, status=status, draft=draft_row,
+            issues=rules.copy_issues(draft_row["subject"] + "\n" + draft_row["body"]) if draft_row else [],
+            usable=[ch for ch in rules.available_channels(org) if ch != "email"],
             templates=drafts.templates_for(t["template_kind"]) if t["template_kind"] else {},
         )
+
+    @app.post("/tasks/<int:task_id>/compose")
+    def compose(task_id):
+        """Write, fill from template, save or send the email for this task, all on the task page."""
+        c = conn()
+        t = get_task(task_id)
+        org = get_org(t["org_id"])
+        action = request.form.get("action", "save")
+        kind = "reply" if task_status(c, org) == "reply waiting" else "invite"
+        existing = current_draft(org["id"])
+        try:
+            rules.check_can_draft(c, org, existing["kind"] if existing else kind, "email")
+        except rules.RuleViolation as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("task", task_id=task_id))
+        subject = request.form.get("subject", existing["subject"] if existing else "")
+        body = request.form.get("body", existing["body"] if existing else "").replace("\r\n", "\n")
+        language = request.form.get("language", "en")
+        if action == "template" and t["template_kind"]:
+            subject, body = drafts.render_invite({**dict(org), "kind": t["template_kind"]}, language, settings())
+        elif action == "start" and not existing:
+            subject, body = (drafts.render_reply(org, "Your message", settings()) if kind == "reply"
+                             else drafts.render_blank(settings()))
+        if existing:
+            c.execute("UPDATE outreach SET subject = ?, body = ? WHERE id = ?", (subject, body, existing["id"]))
+            draft_id = existing["id"]
+        else:
+            draft_id = c.execute(
+                """INSERT INTO outreach (org_id, task_id, kind, channel, language, subject, body, drafted_at)
+                   VALUES (?, ?, ?, 'email', ?, ?, ?, ?)""",
+                (org["id"], task_id, kind, language, subject, body, db.now()),
+            ).lastrowid
+        c.commit()
+        if action == "send":
+            row = one("SELECT * FROM outreach WHERE id = ?", (draft_id,))
+            error = deliver(row, org, request.form.get("reviewed") == "yes")
+            flash(error or f"Sent from {mailbox().user}.", "error" if error else "ok")
+        elif action == "discard":
+            c.execute("DELETE FROM outreach WHERE id = ? AND sent_at IS NULL", (draft_id,))
+            c.commit()
+        elif action == "save":
+            flash("Draft saved.", "ok")
+        return redirect(url_for("task", task_id=task_id) + "#email")
+
+    @app.post("/tasks/<int:task_id>/contacted")
+    def contacted(task_id):
+        """Record contact made outside email (WhatsApp, phone, contact form, social, in person)."""
+        c = conn()
+        t = get_task(task_id)
+        org = get_org(t["org_id"])
+        channel = request.form.get("channel", "phone")
+        note = request.form.get("note", "").strip()
+        who = request.form.get("sent_by", "").strip()
+        kind = "reply" if task_status(c, org) == "reply waiting" else "invite"
+        try:
+            if not note or not who:
+                raise rules.RuleViolation("Say what was sent and who sent it.")
+            rules.check_can_draft(c, org, kind, channel)
+            issues = rules.copy_issues(note)
+            if issues:
+                raise rules.RuleViolation("Fix the message first: " + " ".join(issues))
+        except rules.RuleViolation as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("task", task_id=task_id))
+        c.execute(
+            """INSERT INTO outreach (org_id, task_id, kind, channel, language, subject, body, drafted_at, sent_at, sent_by)
+               VALUES (?, ?, ?, ?, 'en', '', ?, ?, ?, ?)""",
+            (org["id"], task_id, kind, channel, note, db.now(), db.now(), who),
+        )
+        c.commit()
+        flash("Recorded.", "ok")
+        return redirect(url_for("task", task_id=task_id))
 
     @app.post("/tasks/<int:task_id>/draft")
     def draft(task_id):
@@ -415,18 +487,16 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
         return redirect(url_for("task", task_id=row["task_id"]) if row["task_id"]
                         else url_for("organisation", org_id=row["org_id"]))
 
-    @app.post("/outreach/<int:outreach_id>/send")
-    def send(outreach_id):
+    def deliver(row, org, reviewed):
+        """Send one reviewed email draft from the founder's mailbox. Returns an error or None."""
         c = conn()
-        row = one("SELECT * FROM outreach WHERE id = ?", (outreach_id,))
-        org = get_org(row["org_id"])
         box = mailbox()
         try:
             if row["channel"] != "email":
-                raise rules.RuleViolation("Only emails can be sent from the engine; record other channels as sent.")
+                raise rules.RuleViolation("Only emails can be sent from the engine; record other channels as contacted.")
             if box is None:
                 raise rules.RuleViolation("The mailbox is not connected.")
-            if request.form.get("reviewed") != "yes":
+            if not reviewed:
                 raise rules.RuleViolation("Tick the box to confirm you have read the email before sending.")
             if not row["subject"].strip():
                 raise rules.RuleViolation("Add a subject.")
@@ -440,17 +510,25 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
                 in_reply_to = last["message_id"] if last else None
             message_id = box.send(org["contact_email"], row["subject"], row["body"], in_reply_to)
         except rules.RuleViolation as exc:
-            flash(str(exc), "error")
-            return redirect(url_for("outreach", outreach_id=outreach_id))
+            return str(exc)
         except Exception as exc:  # network or login failure: nothing is marked sent
-            flash(f"Not sent: {exc}", "error")
-            return redirect(url_for("outreach", outreach_id=outreach_id))
+            return f"Not sent: {exc}"
         c.execute(
             "UPDATE outreach SET sent_at = ?, sent_by = ?, message_id = ? WHERE id = ?",
-            (db.now(), box.user, message_id, outreach_id),
+            (db.now(), box.user, message_id, row["id"]),
         )
         c.commit()
-        flash(f"Sent from {box.user}.", "ok")
+        return None
+
+    @app.post("/outreach/<int:outreach_id>/send")
+    def send(outreach_id):
+        row = one("SELECT * FROM outreach WHERE id = ?", (outreach_id,))
+        org = get_org(row["org_id"])
+        error = deliver(row, org, request.form.get("reviewed") == "yes")
+        if error:
+            flash(error, "error")
+            return redirect(url_for("outreach", outreach_id=outreach_id))
+        flash(f"Sent from {mailbox().user}.", "ok")
         return back_to(row)
 
     @app.post("/outreach/<int:outreach_id>/sent")

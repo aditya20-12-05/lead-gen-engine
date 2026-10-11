@@ -1,54 +1,31 @@
 {% extends "base.html" %}
-{% from "_macros.html" import task_table %}
+{% from "_macros.html" import status_pill %}
 {% block content %}
-<h1>Countries</h1>
-
-{% if mail_user %}
-<div class="card">
-  <form method="post" action="{{ url_for('check_mail') }}" class="inline"><button>Check for replies</button></form>
-  <form method="post" action="{{ url_for('test_mail') }}" class="inline"><button class="secondary">Test mailbox connection</button></form>
-  <span class="muted">Reads {{ mail_user }} for replies from organisations we have emailed; never marks mail as read.</span>
+{% if waiting %}
+<div class="card" style="border-left:4px solid #8a5a00">
+  <h2 style="margin-top:0">Replies waiting for you</h2>
+  {% for t in waiting %}
+    <p><a href="{{ url_for('task', task_id=t.task_id) }}">{{ t.org.name }}</a> <span class="muted">({{ countries.get(t.org.country, t.org.country) }})</span></p>
+  {% endfor %}
 </div>
 {% endif %}
 
-<h2>This week</h2>
-{% if soon %}
-<table>
-  <tr><th>Date</th><th>What</th><th></th></tr>
-  {% for i in soon %}
-  <tr>
-    <td class="{{ 'bad' if i.kind == 'task' and i.date < today else '' }}">{{ i.date }}{% if i.end_date %} to {{ i.end_date }}{% endif %}</td>
-    <td>{% if i.task_id %}<a href="{{ url_for('task', task_id=i.task_id) }}">{{ i.title }}</a>{% else %}{{ i.title }}{% endif %}{% if i.note %}<br><span class="muted">{{ i.note }}</span>{% endif %}</td>
-    <td><span class="pill">{{ i.kind }}</span></td>
-  </tr>
-  {% endfor %}
-</table>
-{% else %}<p class="muted">Nothing due in the next 7 days.</p>{% endif %}
-
-{% if waiting %}
-<h2>Replies waiting for us ({{ waiting|length }})</h2>
-{{ task_table(waiting) }}
-{% endif %}
-
+<h1>Countries</h1>
 <div class="grid">
   {% for code, entry in summary.items() %}
-  <div class="card">
-    <h2 style="margin-top:0"><a href="{{ url_for('country', code=code) }}">{{ countries.get(code, code) }}</a></h2>
-    {% if entry.waiting %}<p class="pill waiting">{{ entry.waiting }} repl{{ 'y' if entry.waiting == 1 else 'ies' }} waiting</p>{% endif %}
-    <ul>
-      {% for a in entry.approaches %}
-      <li><a href="{{ url_for('approach', approach_id=a.approach.id) }}">{{ a.approach.name }}</a>
-        <span class="muted">{{ a.count }} task{{ '' if a.count == 1 else 's' }}{% if a.ready %}, {{ a.ready }} ready{% endif %}{% if a.approach.status != 'active' %}, {{ a.approach.status }}{% endif %}</span></li>
-      {% endfor %}
-    </ul>
-  </div>
+  <a href="{{ url_for('country', code=code) }}" class="card" style="text-decoration:none; color:inherit; display:block">
+    <h2 style="margin:0 0 6px">{{ countries.get(code, code) }}</h2>
+    {% for a in entry.approaches %}<div class="muted">{{ a.approach.name }} · {{ a.count }}</div>{% endfor %}
+    {% if entry.waiting %}<p style="margin:8px 0 0"><span class="pill waiting">{{ entry.waiting }} repl{{ 'y' if entry.waiting == 1 else 'ies' }}</span></p>{% endif %}
+  </a>
   {% endfor %}
 </div>
 
-<h2>Start a new country</h2>
-<form class="card" onsubmit="location.href='/countries/' + this.code.value; return false;">
-  <select name="code">{% for code, label in countries.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}</select>
-  <p><button>Open</button></p>
-</form>
-
+<details class="card">
+  <summary>Add a country</summary>
+  <form onsubmit="location.href='/countries/' + this.code.value; return false;" style="margin-top:8px">
+    <select name="code" style="width:auto">{% for code, label in countries.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}</select>
+    <button>Open</button>
+  </form>
+</details>
 {% endblock %}

@@ -140,7 +140,8 @@ def test_seed_builds_countries_approaches_and_tasks(conn):
 
 def test_pages_render(client, conn):
     gb = conn.execute("SELECT id FROM approaches WHERE country = 'GB'").fetchone()["id"]
-    for path in ["/", "/countries/GB", f"/approaches/{gb}", f"/tasks/{task_id(conn, 'Gujarati Samaj UAE')}",
+    assert client.get(f"/approaches/{gb}").status_code == 302  # approaches live on the country page
+    for path in ["/", "/countries/GB", f"/tasks/{task_id(conn, 'Gujarati Samaj UAE')}",
                  "/orgs", f"/orgs/{org_id(conn, 'Gujarati Samaj UAE')}", "/events", "/enquiries", "/dnc"]:
         assert client.get(path).status_code == 200, path
 
@@ -417,9 +418,49 @@ def test_task_lists_use_the_right_organisation(client, conn):
                                            "source_url": "https://l", "contact_email": "news@leicester.example"})
     tid = task_id(conn, "Leicester Weekly")
     assert tid != org_id(conn, "Leicester Weekly")
-    page = client.get(f"/approaches/{gb}").get_data(as_text=True)
+    page = client.get("/countries/GB").get_data(as_text=True)
     row = page[page.index(f"/tasks/{tid}"):][:400]
     assert "news@leicester.example" in row and ">ready<" in row
+
+
+# Simplified task page: write and send in place
+
+def test_compose_template_save_and_send_on_the_task_page(client, conn, app):
+    tid = task_id(conn, "Gujarati Samaj UAE")
+    client.post(f"/tasks/{tid}/compose", data={"action": "template", "language": "en"})
+    page = client.get(f"/tasks/{tid}").get_data(as_text=True)
+    assert "Coming Home" in page and 'name="subject"' in page
+    row = conn.execute("SELECT * FROM outreach WHERE task_id = ? AND sent_at IS NULL", (tid,)).fetchone()
+    body = row["body"].replace("[", "").replace("]", "")
+    client.post(f"/tasks/{tid}/compose", data={"action": "save", "subject": row["subject"], "body": body})
+    client.post(f"/tasks/{tid}/compose", data={"action": "send", "subject": row["subject"], "body": body})
+    assert app.config["SENT"] == []  # not ticked as reviewed
+    client.post(f"/tasks/{tid}/compose", data={"action": "send", "subject": row["subject"], "body": body,
+                                                "reviewed": "yes"})
+    assert len(app.config["SENT"]) == 1 and sent_at(conn, row["id"])
+    assert conn.execute("SELECT count(*) AS n FROM outreach WHERE task_id = ?", (tid,)).fetchone()["n"] == 1
+    # Nobody contacted twice: the compose box refuses a second first email.
+    client.post(f"/tasks/{tid}/compose", data={"action": "start"})
+    assert conn.execute("SELECT count(*) AS n FROM outreach WHERE task_id = ?", (tid,)).fetchone()["n"] == 1
+
+
+def test_compose_discard_removes_the_draft(client, conn):
+    tid = task_id(conn, "Gujarati Samaj Qatar")
+    client.post(f"/tasks/{tid}/compose", data={"action": "start"})
+    assert conn.execute("SELECT count(*) AS n FROM outreach WHERE task_id = ?", (tid,)).fetchone()["n"] == 1
+    client.post(f"/tasks/{tid}/compose", data={"action": "discard"})
+    assert conn.execute("SELECT count(*) AS n FROM outreach WHERE task_id = ?", (tid,)).fetchone()["n"] == 0
+
+
+def test_contacted_another_way_counts_as_first_contact(client, conn):
+    tid = task_id(conn, "Gujarat Samachar UK and Asian Voice (ABPL)")
+    client.post(f"/tasks/{tid}/contacted", data={"channel": "phone", "note": "Called the desk", "sent_by": ""})
+    assert conn.execute("SELECT count(*) AS n FROM outreach WHERE task_id = ?", (tid,)).fetchone()["n"] == 0
+    client.post(f"/tasks/{tid}/contacted", data={"channel": "phone", "note": "Called the news desk about a column",
+                                                 "sent_by": "Ishit"})
+    client.post(f"/tasks/{tid}/contacted", data={"channel": "phone", "note": "Called again", "sent_by": "Ishit"})
+    rows = conn.execute("SELECT * FROM outreach WHERE task_id = ?", (tid,)).fetchall()
+    assert len(rows) == 1 and rows[0]["sent_at"] and rows[0]["channel"] == "phone"
 
 
 # Secret link
@@ -499,8 +540,6 @@ def test_calendar_shows_festivals_task_steps_and_reminders(client, conn):
     client.post("/calendar", data={"date": soon, "title": "Draft first UK column", "kind": "deadline"})
     calendar = client.get("/calendar").get_data(as_text=True)
     assert "Diwali" in calendar and "Propose November date" in calendar and "Draft first UK column" in calendar
-    overview = client.get("/").get_data(as_text=True)
-    assert "Propose November date" in overview and "Draft first UK column" in overview
 
 
 # Zoho Mail API

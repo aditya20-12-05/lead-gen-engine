@@ -1,28 +1,59 @@
 {% extends "base.html" %}
-{% from "_macros.html" import task_table %}
+{% from "_macros.html" import status_pill %}
 {% block content %}
 <p class="muted"><a href="{{ url_for('overview') }}">Countries</a></p>
 <h1>{{ countries.get(code, code) }}</h1>
 
 {% for item in approaches %}
-<div class="card">
-  <h2 style="margin-top:0"><a href="{{ url_for('approach', approach_id=item.approach.id) }}">{{ item.approach.name }}</a>
-    <span class="pill">{{ item.approach.status }}</span></h2>
-  <p class="muted">{{ item.approach.our_brief.splitlines()[0] }}</p>
-  {{ task_table(item.tasks) }}
+{% set a = item.approach %}
+<div class="card" id="approach-{{ a.id }}">
+  <h2 style="margin-top:0">{{ a.name }}</h2>
+
+  <details>
+    <summary>Our brief</summary>
+    <form method="post" action="{{ url_for('approach', approach_id=a.id) }}">
+      <input type="hidden" name="action" value="brief">
+      <input type="hidden" name="status" value="{{ a.status }}">
+      <textarea name="our_brief" style="min-height:220px">{{ a.our_brief }}</textarea>
+      <p><button class="secondary">Save brief</button></p>
+    </form>
+  </details>
+
+  <table style="margin-top:12px">
+    <tr><th>Organisation</th><th>Email</th><th>Status</th></tr>
+    {% for t in item.tasks %}
+    <tr>
+      <td><a href="{{ url_for('task', task_id=t.task_id) }}">{{ t.org.name }}</a></td>
+      <td class="muted">{{ t.org.contact_email or '' }}</td>
+      <td>{{ status_pill(t.status) }}</td>
+    </tr>
+    {% else %}<tr><td colspan="3" class="muted">No organisations yet.</td></tr>{% endfor %}
+  </table>
+
+  <details style="margin-top:12px">
+    <summary>Add an organisation</summary>
+    <form method="post" action="{{ url_for('approach', approach_id=a.id) }}">
+      <input type="hidden" name="action" value="add_task">
+      <input type="hidden" name="kind" value="{{ 'community' if a.template_kind == 'community' else 'media' }}">
+      <div class="grid">
+        <div><label>Name</label><input name="name" required></div>
+        <div><label>Email</label><input name="contact_email" type="email"></div>
+        <div><label>Where you found it (link)</label><input name="source_url" required></div>
+      </div>
+      <label>Their brief</label><textarea name="source_note" style="min-height:80px"></textarea>
+      <p><button>Add</button></p>
+    </form>
+  </details>
 </div>
-{% else %}
-<p class="muted">No approaches in {{ countries.get(code, code) }} yet.</p>
 {% endfor %}
 
-<h2>Add an approach</h2>
-<form method="post" class="card">
-  <div class="grid">
-    <div><label>Name</label><input name="name" placeholder="Weekly newspaper column" required></div>
-    <div><label>Status</label><select name="status"><option>active</option><option>planned</option><option>paused</option></select></div>
-    <div><label>Email template</label><select name="template_kind"><option value="">none (team writes each email)</option><option value="community">community body invitation</option><option value="employer">employer HR invitation</option></select></div>
-  </div>
-  <label>Our brief</label><textarea name="our_brief" style="min-height:160px" required></textarea>
-  <p><button>Add approach</button></p>
-</form>
+<details class="card">
+  <summary>Add a new approach in {{ countries.get(code, code) }}</summary>
+  <form method="post">
+    <label>Name</label><input name="name" placeholder="Weekly newspaper column" required>
+    <label>Our brief</label><textarea name="our_brief" style="min-height:140px" required></textarea>
+    <input type="hidden" name="status" value="active">
+    <p><button>Add approach</button></p>
+  </form>
+</details>
 {% endblock %}
