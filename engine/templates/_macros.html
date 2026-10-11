@@ -1,5 +1,5 @@
 {% macro status_pill(status) -%}
-<span class="pill {{ 'ready' if status == 'ready' else 'waiting' if status == 'reply waiting' else 'blocked' if status in ('needs contact', 'do not contact') else '' }}">{{ status }}</span>
+<span class="pill {{ 'ready' if status == 'ready' else 'waiting' if status == 'reply waiting' else 'blocked' if status in ('needs contact', 'do not contact', 'undelivered') else '' }}">{{ status }}</span>
 {%- endmacro %}
 
 {% macro editor(html, fonts, sizes, form_id) %}

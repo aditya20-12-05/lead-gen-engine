@@ -78,11 +78,92 @@ def contacted_orgs(conn):
 def sent_message_ids(conn):
     """Message-IDs of the emails we sent, so replies can be matched by thread."""
     rows = conn.execute(
-        """SELECT o.message_id, o.org_id, o.task_id, lower(g.contact_email) AS email
+        """SELECT o.id AS outreach_id, o.message_id, o.org_id, o.task_id, lower(g.contact_email) AS email
            FROM outreach o JOIN organisations g ON g.id = o.org_id
            WHERE o.sent_at IS NOT NULL AND o.channel = 'email' AND o.message_id IS NOT NULL"""
     ).fetchall()
     return {r["message_id"].strip(): r for r in rows}
+
+
+# Bounces: "undelivered" notices from the receiving side.
+
+BOUNCE_SENDERS = {"mailer-daemon", "mailerdaemon", "postmaster", "mail-daemon"}
+BOUNCE_SUBJECT = re.compile(
+    r"(?i)undeliver|delivery status notification \(failure\)|delivery failure|failure notice|returned mail|"
+    r"mail delivery failed|delivery has failed|not delivered|could not be delivered|delivery incomplete"
+)
+REASON_CODE = re.compile(r"\b[45]\d\d[\s-]+[45]\.\d{1,3}\.\d{1,3}\b[^\n]*")
+REASON_LINE = re.compile(r"(?m)^\s*[45]\d\d\b[^\n]*")
+REASON_WORDS = re.compile(
+    r"(?i)[^\n]*(does not exist|doesn't exist|not found|unknown user|user unknown|no such user|"
+    r"mailbox unavailable|address rejected|rejected|quota|mailbox full|spf|dkim|dmarc|blocked|spam|"
+    r"couldn't be found|could not be found|unable to receive)[^\n]*"
+)
+
+
+def looks_like_bounce(headers, contacted_addresses=()):
+    sender = parseaddr(str(headers.get("From", "")))[1].lower()
+    subject = str(headers.get("Subject", ""))
+    content_type = re.sub(r'[\s"]', "", str(headers.get("Content-Type", "")).lower())
+    if re.search(r"(?i)\bdelay", subject):
+        return False  # "still trying" warnings, not failures
+    if sender.split("@")[0] in BOUNCE_SENDERS or "report-type=delivery-status" in content_type:
+        return True
+    return bool(BOUNCE_SUBJECT.search(subject)) and sender not in contacted_addresses
+
+
+def parse_bounce(message, raw_text):
+    """Failed recipients, the reason given, and whether it is a real failure."""
+    recipients, diagnostic, actions = [], None, []
+    for part in message.walk():
+        if part.get_content_type() != "message/delivery-status":
+            continue
+        payload = part.get_payload()
+        for block in payload if isinstance(payload, list) else []:
+            for key in ("Final-Recipient", "Original-Recipient"):
+                if block.get(key):
+                    recipients.append(str(block.get(key)).split(";")[-1].strip().strip("<>").lower())
+            if block.get("Diagnostic-Code") and not diagnostic:
+                diagnostic = " ".join(str(block.get("Diagnostic-Code")).split(";", 1)[-1].split())
+            if block.get("Action"):
+                actions.append(str(block.get("Action")).strip().lower())
+    if actions and not any(a == "failed" for a in actions):
+        return recipients, None, False  # delayed, delivered or relayed
+    reason = diagnostic
+    if not reason:
+        text = plain_text(message) or raw_text
+        found = REASON_CODE.search(text) or REASON_LINE.search(text) or REASON_WORDS.search(text)
+        reason = " ".join(found.group(0).split()) if found else None
+    return recipients, (reason or "Returned as undeliverable; no reason given.")[:300], True
+
+
+def record_bounce(conn, message, raw_text, by_message, summary):
+    recipients, reason, failed = parse_bounce(message, raw_text)
+    if not failed:
+        return
+    row = next((r for mid, r in by_message.items() if mid in raw_text), None)
+    address = row["email"] if row is not None else None
+    if row is None:
+        sent = conn.execute(
+            """SELECT o.id AS outreach_id, o.org_id, lower(coalesce(o.to_addr, g.contact_email)) AS addr
+               FROM outreach o JOIN organisations g ON g.id = o.org_id
+               WHERE o.sent_at IS NOT NULL AND o.channel = 'email' ORDER BY o.sent_at"""
+        ).fetchall()
+        by_addr = {r["addr"]: r for r in sent if r["addr"]}
+        candidates = recipients or [a for a in by_addr if re.search(r"(?<![\w.+-])" + re.escape(a) + r"(?![\w-])",
+                                                                  raw_text, re.I)]
+        row = next((by_addr[a] for a in candidates if a in by_addr), None)
+        address = row["addr"] if row is not None else None
+    if row is None:
+        return
+    address = recipients[0] if recipients else address
+    cur = conn.execute(
+        "UPDATE outreach SET bounced_at = ?, bounce_reason = ?, to_addr = coalesce(to_addr, ?) "
+        "WHERE id = ? AND bounced_at IS NULL",
+        (now(), reason, address, row["outreach_id"]),
+    )
+    if cur.rowcount:
+        summary["bounced"].append(address)
 
 
 def store_reply(conn, row, message_id, subject, body, summary, from_addr=None):
@@ -189,7 +270,7 @@ class SmtpMailbox:
         or References carries our Message-ID), whoever sent it, or when it comes
         from the address we wrote to. Our own sent copies are skipped.
         """
-        summary = {"new": 0, "opt_outs": [], "looked_for": []}
+        summary = {"new": 0, "opt_outs": [], "looked_for": [], "bounced": []}
         contacted = contacted_orgs(conn)
         if not contacted:
             return summary
@@ -203,11 +284,11 @@ class SmtpMailbox:
             imap.select("INBOX", readonly=True)
             status, data = imap.search(None, "SINCE", _imap_date(since))
             nums = data[0].split() if status == "OK" and data and data[0] else []
-            matched = []
+            matched, bounces = [], []
             for chunk in range(0, len(nums), 200):
                 status, parts = imap.fetch(
                     b",".join(nums[chunk:chunk + 200]),
-                    "(BODY.PEEK[HEADER.FIELDS (FROM MESSAGE-ID IN-REPLY-TO REFERENCES)])",
+                    "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT CONTENT-TYPE MESSAGE-ID IN-REPLY-TO REFERENCES)])",
                 )
                 if status != "OK":
                     continue
@@ -219,6 +300,9 @@ class SmtpMailbox:
                     message_id = (headers.get("Message-ID") or "").strip()
                     if message_id in by_message:
                         continue  # our own email (a copy to ourselves)
+                    if looks_like_bounce(headers, by_email):
+                        bounces.append(num)
+                        continue
                     refs = re.findall(r"<[^>]+>", f"{headers.get('In-Reply-To', '')} {headers.get('References', '')}")
                     row = next((by_message[ref] for ref in refs if ref in by_message), None)
                     sender = parseaddr(str(headers.get("From", "")))[1].lower()
@@ -239,6 +323,13 @@ class SmtpMailbox:
                 message_id = (message.get("Message-ID") or "").strip() or None
                 store_reply(conn, row, message_id, str(message.get("Subject", "")), plain_text(message), summary,
                             from_addr=sender)
+            for num in bounces:
+                status, parts = imap.fetch(num, "(BODY.PEEK[])")
+                if status != "OK" or not parts or not isinstance(parts[0], tuple):
+                    continue
+                raw = parts[0][1]
+                message = email.message_from_bytes(raw, policy=email.policy.default)
+                record_bounce(conn, message, raw.decode("utf-8", "replace"), by_message, summary)
             conn.commit()
         finally:
             try:

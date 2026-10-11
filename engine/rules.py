@@ -146,9 +146,12 @@ def copy_issues(text):
 
 
 def org_already_invited(conn, org_id, contact_email):
-    """Nobody contacted twice: one first contact per organisation (any channel) and per address, ever."""
+    """Nobody contacted twice: one first contact per organisation (any channel) and per address, ever.
+
+    An email that bounced never arrived, so it does not count.
+    """
     row = conn.execute(
-        "SELECT 1 FROM outreach WHERE kind = 'invite' AND sent_at IS NOT NULL AND org_id = ?",
+        "SELECT 1 FROM outreach WHERE kind = 'invite' AND sent_at IS NOT NULL AND bounced_at IS NULL AND org_id = ?",
         (org_id,),
     ).fetchone()
     if row:
@@ -158,10 +161,24 @@ def org_already_invited(conn, org_id, contact_email):
         return False
     row = conn.execute(
         """SELECT 1 FROM outreach o JOIN organisations g ON g.id = o.org_id
-           WHERE o.kind = 'invite' AND o.sent_at IS NOT NULL AND lower(g.contact_email) = ?""",
+           WHERE o.kind = 'invite' AND o.sent_at IS NOT NULL AND o.bounced_at IS NULL
+             AND lower(g.contact_email) = ?""",
         (email,),
     ).fetchone()
     return row is not None
+
+
+def bounced_reason(conn, contact_email):
+    """Why this address bounced before, if it did."""
+    email = normalise_email(contact_email)
+    if not email:
+        return None
+    row = conn.execute(
+        "SELECT bounce_reason FROM outreach WHERE bounced_at IS NOT NULL AND lower(to_addr) = ? "
+        "ORDER BY bounced_at DESC LIMIT 1",
+        (email,),
+    ).fetchone()
+    return row["bounce_reason"] if row else None
 
 
 def awaiting_our_reply(conn, org_id):
@@ -189,6 +206,11 @@ def check_can_draft(conn, org, kind, channel="email"):
         raise RuleViolation(f"No {label.lower()} contact recorded for this organisation.")
     if kind == "invite" and org_already_invited(conn, org["id"], org["contact_email"]):
         raise RuleViolation("Already contacted once. Nobody is contacted twice.")
+    if channel == "email":
+        bounced = bounced_reason(conn, org["contact_email"])
+        if bounced:
+            raise RuleViolation(f"Email to {org['contact_email']} came back undelivered ({bounced}). "
+                                "Enter a different address, or reach them another way.")
     if kind == "reply" and not awaiting_our_reply(conn, org["id"]):
         raise RuleViolation("No new message from them to reply to.")
 

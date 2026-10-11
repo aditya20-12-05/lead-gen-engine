@@ -1,3 +1,4 @@
+import email
 import json
 import os
 from email.message import EmailMessage
@@ -664,6 +665,91 @@ def test_bulk_refuses_bad_copy_and_too_many(client, conn, app):
     page = client.post(f"/approaches/{us}/bulk", data=form).get_data(as_text=True)
     assert "guaranteed" in page and app.config["SENT"] == []
     assert "Guaranteed returns for" in page  # the email is kept on the page to fix
+
+
+# Undelivered emails and the inbox page
+
+def dsn(failed_to, original_id, action="failed", code="smtp; 550 5.1.1 <x>: Recipient address rejected: User unknown"):
+    raw = (
+        "From: Mail Delivery System <MAILER-DAEMON@mx.zoho.in>\r\n"
+        "To: ishit@seleqtwealth.in\r\n"
+        "Subject: Undelivered Mail Returned to Sender\r\n"
+        f"Message-ID: <dsn-{abs(hash(failed_to + action))}@mx.zoho.in>\r\n"
+        "MIME-Version: 1.0\r\n"
+        'Content-Type: multipart/report; report-type=delivery-status; boundary="B"\r\n\r\n'
+        "--B\r\nContent-Type: text/plain\r\n\r\nYour message could not be delivered.\r\n"
+        "--B\r\nContent-Type: message/delivery-status\r\n\r\n"
+        "Reporting-MTA: dns; mx.zoho.in\r\n\r\n"
+        f"Final-Recipient: rfc822; {failed_to}\r\nAction: {action}\r\nStatus: 5.1.1\r\n"
+        f"Diagnostic-Code: {code}\r\n\r\n"
+        "--B\r\nContent-Type: text/rfc822-headers\r\n\r\n"
+        f"Message-ID: {original_id}\r\nSubject: A session\r\n\r\n"
+        "--B--\r\n"
+    )
+    return email.message_from_bytes(raw.encode())
+
+
+def test_bounce_is_recorded_not_treated_as_reply_and_allows_a_new_address(client, conn, app):
+    tid = task_id(conn, "Gujarati Samaj Qatar")
+    did = make_draft(client, tid)
+    send(client, did)
+    ours = conn.execute("SELECT message_id, to_addr FROM outreach WHERE id = ?", (did,)).fetchone()
+    assert ours["to_addr"] == "gujarati.samaj.qatar@gmail.com"
+    app.config["IMAP"].messages = [
+        dsn("gujarati.samaj.qatar@gmail.com", ours["message_id"], action="delayed"),  # still trying: ignored
+    ]
+    result = app.config["MAILBOX"](SETTINGS).fetch_replies(conn)
+    assert result["bounced"] == [] and result["new"] == 0
+    app.config["IMAP"].messages.append(dsn("gujarati.samaj.qatar@gmail.com", ours["message_id"]))
+    result = app.config["MAILBOX"](SETTINGS).fetch_replies(conn)
+    assert result["bounced"] == ["gujarati.samaj.qatar@gmail.com"] and result["new"] == 0
+    row = conn.execute("SELECT bounced_at, bounce_reason FROM outreach WHERE id = ?", (did,)).fetchone()
+    assert row["bounced_at"] and "User unknown" in row["bounce_reason"]
+    assert conn.execute("SELECT count(*) AS n FROM inbound").fetchone()["n"] == 0
+    page = client.get(f"/tasks/{tid}").get_data(as_text=True)
+    assert "undelivered" in page and "User unknown" in page and "Contacted them another way" in page
+    # Same address: refused. A corrected address: allowed, since the first email never arrived.
+    client.post(f"/tasks/{tid}/compose", data={"action": "start"})
+    assert conn.execute("SELECT count(*) AS n FROM outreach WHERE sent_at IS NULL").fetchone()["n"] == 0
+    client.post(f"/tasks/{tid}", data={"contact_email": "secretary@gsq.example", "source_note": "", "plan": "", "owner": ""})
+    client.post(f"/tasks/{tid}/compose", data={"action": "start"})
+    assert conn.execute("SELECT count(*) AS n FROM outreach WHERE sent_at IS NULL").fetchone()["n"] == 1
+    assert app.config["MAILBOX"](SETTINGS).fetch_replies(conn)["bounced"] == []  # recorded once
+
+
+def test_plain_text_bounce_matched_by_address(client, conn, app):
+    tid = task_id(conn, "Gujarati Samaj Abu Dhabi")
+    did = make_draft(client, tid)
+    send(client, did)
+    m = EmailMessage()
+    m["From"], m["To"], m["Subject"] = "postmaster@yahoo.com", "ishit@seleqtwealth.in", "Failure Notice"
+    m["Message-ID"] = "<fail-1@yahoo.com>"
+    m.set_content("Sorry, we were unable to deliver your message to the following address.\n\n"
+                  "<gujaratisamajabudhabi@yahoo.com>:\n554: delivery error: dd This user doesn't have a yahoo.com account")
+    app.config["IMAP"].messages = [m]
+    assert app.config["MAILBOX"](SETTINGS).fetch_replies(conn)["bounced"] == ["gujaratisamajabudhabi@yahoo.com"]
+    reason = conn.execute("SELECT bounce_reason FROM outreach WHERE id = ?", (did,)).fetchone()[0]
+    assert "doesn't have a yahoo.com account" in reason
+
+
+def test_inbox_page_counts_sent_undelivered_and_replies(client, conn, app):
+    qa, uae = task_id(conn, "Gujarati Samaj Qatar"), task_id(conn, "Gujarati Samaj UAE")
+    qa_id, uae_id = make_draft(client, qa), make_draft(client, uae)
+    send(client, qa_id)
+    send(client, uae_id)
+    qa_mid = conn.execute("SELECT message_id FROM outreach WHERE id = ?", (qa_id,)).fetchone()[0]
+    app.config["IMAP"].messages = [dsn("gujarati.samaj.qatar@gmail.com", qa_mid),
+                                   reply("gujaratisamajemirates@gmail.com", "Yes, please.")]
+    page = client.get("/inbox").get_data(as_text=True)  # checks the mailbox on opening
+    import re
+    numbers = dict((label, int(n)) for n, label in re.findall(r'<div class="n"[^>]*>(\d+)%?</div><div class="l">([^<]+)<', page))
+    assert numbers["Emails sent"] == 2 and numbers["Delivered"] == 1 and numbers["Undelivered"] == 1
+    assert numbers["Organisations replied"] == 1 and numbers["Replies waiting for you"] == 1
+    assert numbers["Reply rate (of delivered)"] == 100
+    undelivered = client.get("/inbox?show=undelivered").get_data(as_text=True)
+    assert "Gujarati Samaj Qatar" in undelivered and "User unknown" in undelivered and "Gujarati Samaj UAE" not in undelivered
+    replies = client.get("/inbox?show=replies").get_data(as_text=True)
+    assert "waiting for you" in replies and "Gujarati Samaj UAE" in replies
 
 
 # Secret link

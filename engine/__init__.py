@@ -48,7 +48,10 @@ def status_context(c):
     return {
         "dnc": {(r["kind"], r["value"]) for r in c.execute("SELECT kind, value FROM dnc")},
         "last_out": {r["org_id"]: r["t"] for r in c.execute(
-            "SELECT org_id, max(sent_at) AS t FROM outreach WHERE sent_at IS NOT NULL GROUP BY org_id")},
+            "SELECT org_id, max(sent_at) AS t FROM outreach WHERE sent_at IS NOT NULL AND bounced_at IS NULL "
+            "GROUP BY org_id")},
+        "bounced": {(r["org_id"], r["addr"]) for r in c.execute(
+            "SELECT DISTINCT org_id, lower(to_addr) AS addr FROM outreach WHERE bounced_at IS NOT NULL")},
         "last_in": {r["org_id"]: r["t"] for r in c.execute(
             "SELECT org_id, max(received_at) AS t FROM inbound GROUP BY org_id")},
         "drafts": {r["org_id"] for r in c.execute(
@@ -69,6 +72,8 @@ def task_status(c, org, ctx=None):
         return "sent, awaiting reply"
     if org["id"] in ctx["drafts"]:
         return "draft"
+    if (org["id"], rules.normalise_email(org["contact_email"])) in ctx["bounced"]:
+        return "undelivered"
     if not rules.available_channels(org):
         return "needs contact"
     return "ready"
@@ -250,6 +255,61 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
         share_link = (request.host_url.rstrip("/") + "/open/" + app.config["ACCESS_KEY"]
                       if app.config["ACCESS_KEY"] else request.host_url)
         return render_template("overview.html", summary=summary, waiting=waiting, soon=soon, share_link=share_link)
+
+    @app.get("/inbox")
+    def inbox():
+        """Everything sent and received in one place: totals, undelivered emails and replies."""
+        auto_check_mail()
+        c = conn()
+        show = request.args.get("show", "all")
+        task_of = "(SELECT min(t.id) FROM tasks t WHERE t.org_id = g.id)"
+        rows = c.execute(
+            f"""SELECT 'out' AS dir, o.id, o.sent_at AS at, o.channel, o.subject, o.body, o.to_addr AS addr,
+                       o.bounce_reason, o.sent_by, g.id AS org_id, g.name, g.country, {task_of} AS task_id
+                FROM outreach o JOIN organisations g ON g.id = o.org_id WHERE o.sent_at IS NOT NULL
+                UNION ALL
+                SELECT 'in', i.id, i.received_at, i.channel, coalesce(i.subject, ''), i.body, i.from_addr,
+                       NULL, NULL, g.id, g.name, g.country, {task_of}
+                FROM inbound i JOIN organisations g ON g.id = i.org_id
+                ORDER BY at DESC"""
+        ).fetchall()
+        ctx = status_context(c)
+        waiting = {org for org, t in ctx["last_in"].items() if not ctx["last_out"].get(org) or t > ctx["last_out"][org]}
+        replied = set(ctx["last_in"])
+        emails = [r for r in rows if r["dir"] == "out" and r["channel"] == "email"]
+        bounced = [r for r in emails if r["bounce_reason"]]
+        delivered_orgs = {r["org_id"] for r in emails if not r["bounce_reason"]}
+        today = date.today().isoformat()
+        week = (date.today() - timedelta(days=6)).isoformat()
+        stats = {
+            "sent": len(emails),
+            "delivered": len(emails) - len(bounced),
+            "undelivered": len(bounced),
+            "other": sum(1 for r in rows if r["dir"] == "out" and r["channel"] != "email"),
+            "replied": len(replied),
+            "waiting": len(waiting),
+            "rate": round(100 * len(replied & delivered_orgs) / len(delivered_orgs)) if delivered_orgs else 0,
+            "today": sum(1 for r in emails if r["at"][:10] == today),
+            "week": sum(1 for r in emails if r["at"][:10] >= week),
+        }
+        by_country = {}
+        for r in rows:
+            entry = by_country.setdefault(r["country"], {"sent": 0, "undelivered": 0, "orgs": set(), "replied": set()})
+            if r["dir"] == "out":
+                entry["sent"] += 1
+                entry["undelivered"] += 1 if r["bounce_reason"] else 0
+                entry["orgs"].add(r["org_id"])
+            else:
+                entry["replied"].add(r["org_id"])
+        if show == "replies":
+            rows = [r for r in rows if r["dir"] == "in"]
+        elif show == "undelivered":
+            rows = [r for r in rows if r["bounce_reason"]]
+        elif show == "sent":
+            rows = [r for r in rows if r["dir"] == "out"]
+        return render_template("inbox.html", rows=rows[:300], total=len(rows), stats=stats, show=show,
+                               by_country=dict(sorted(by_country.items())), waiting=waiting, replied=replied,
+                               channels=rules.CHANNELS)
 
     @app.route("/countries/<code>", methods=["GET", "POST"])
     def country(code):
@@ -448,10 +508,12 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
             return redirect(url_for("task", task_id=task_id))
         auto_check_mail()
         thread = c.execute(
-            """SELECT 'out' AS dir, id, kind, channel, subject, body, sent_at AS at, sent_at, sent_by
+            """SELECT 'out' AS dir, id, kind, channel, subject, body, sent_at AS at, sent_at, sent_by,
+                      to_addr, bounce_reason
                FROM outreach WHERE org_id = ? AND sent_at IS NOT NULL
                UNION ALL
-               SELECT 'in', id, 'reply', channel, coalesce(subject, ''), body, received_at, received_at, from_addr
+               SELECT 'in', id, 'reply', channel, coalesce(subject, ''), body, received_at, received_at, from_addr,
+                      NULL, NULL
                FROM inbound WHERE org_id = ? ORDER BY at""",
             (org["id"], org["id"]),
         ).fetchall()
@@ -635,8 +697,8 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
         except Exception as exc:  # network or login failure: nothing is marked sent
             return f"Not sent: {exc}"
         c.execute(
-            "UPDATE outreach SET sent_at = ?, sent_by = ?, message_id = ? WHERE id = ?",
-            (db.now(), box.user, message_id, row["id"]),
+            "UPDATE outreach SET sent_at = ?, sent_by = ?, message_id = ?, to_addr = ? WHERE id = ?",
+            (db.now(), box.user, message_id, rules.normalise_email(org["contact_email"]), row["id"]),
         )
         c.commit()
         return None
@@ -701,12 +763,16 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
             c.rollback()
             flash(f"Could not check the mailbox for replies: {exc}", "error")
             return
+        bounced = result.get("bounced") or []
+        if bounced:
+            flash(f"{len(bounced)} email{'' if len(bounced) == 1 else 's'} came back undelivered: "
+                  + ", ".join(bounced) + ". See the Inbox page.", "error")
         if result["new"]:
             message = f"{result['new']} new repl{'y' if result['new'] == 1 else 'ies'}."
             if result["opt_outs"]:
                 message += " Added to do not contact: " + ", ".join(result["opt_outs"]) + "."
             flash(message, "ok")
-        elif announce_nothing:
+        elif announce_nothing and not bounced:
             looked = result.get("looked_for")
             flash("No new replies." + (
                 f" Looked in the inbox for answers to our emails and for mail from {', '.join(looked)}."

@@ -40,12 +40,21 @@
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; } @media (max-width: 800px) { .two { grid-template-columns: 1fr; } }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
   .inline { display: inline; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .stat { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; }
+  .stat .n { font-size: 26px; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .stat .l { color: #5b6475; font-size: 13px; margin-top: 2px; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 12px; }
+  .tabs a { padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line); text-decoration: none; color: inherit; background: #fff; font-size: 14px; }
+  .tabs a.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   pre { white-space: pre-wrap; background: #fafbfc; border: 1px solid var(--line); padding: 12px; }
 </style>
 </head>
 <body>
 <header>
   <a href="{{ url_for('overview') }}" style="opacity:1"><strong>SELEQT OUTREACH</strong></a>
+  <a href="{{ url_for('overview') }}"{% if request.endpoint == "overview" %} style="text-decoration:underline; opacity:1"{% endif %}>Countries</a>
+  <a href="{{ url_for('inbox') }}"{% if request.endpoint == "inbox" %} style="text-decoration:underline; opacity:1"{% endif %}>Inbox</a>
   <span style="margin-left:auto; display:flex; gap:12px; align-items:center">
     {% if mail_user %}
       <span style="color:#cfe8d6; font-size:13px">{{ mail_user }}</span>

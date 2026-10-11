@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Inbox</h1>
+
+<div class="stats">
+  <div class="stat"><div class="n">{{ stats.sent }}</div><div class="l">Emails sent</div></div>
+  <div class="stat"><div class="n" style="color:var(--good)">{{ stats.delivered }}</div><div class="l">Delivered</div></div>
+  <div class="stat"><div class="n" style="color:var(--bad)">{{ stats.undelivered }}</div><div class="l">Undelivered</div></div>
+  <div class="stat"><div class="n">{{ stats.replied }}</div><div class="l">Organisations replied</div></div>
+  <div class="stat"><div class="n" style="color:#8a5a00">{{ stats.waiting }}</div><div class="l">Replies waiting for you</div></div>
+  <div class="stat"><div class="n">{{ stats.rate }}%</div><div class="l">Reply rate (of delivered)</div></div>
+</div>
+<p class="muted" style="margin-top:-6px">Sent today: {{ stats.today }} · last 7 days: {{ stats.week }}{% if stats.other %} · contacted another way (phone, WhatsApp, forms): {{ stats.other }}{% endif %}</p>
+
+{% if by_country %}
+<details class="card">
+  <summary>By country</summary>
+  <table style="margin-top:8px">
+    <tr><th>Country</th><th>Sent</th><th>Undelivered</th><th>Replied</th></tr>
+    {% for code, e in by_country.items() %}
+    <tr>
+      <td><a href="{{ url_for('country', code=code) }}">{{ countries.get(code, code) }}</a></td>
+      <td>{{ e.sent }}</td>
+      <td>{% if e.undelivered %}<span class="bad">{{ e.undelivered }}</span>{% else %}0{% endif %}</td>
+      <td>{{ e.replied|length }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</details>
+{% endif %}
+
+<div class="tabs">
+  {% for key, label in [('all', 'Everything'), ('replies', 'Replies'), ('undelivered', 'Undelivered'), ('sent', 'Sent')] %}
+  <a href="{{ url_for('inbox', show=key) }}" class="{{ 'on' if show == key else '' }}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+<div class="card" style="padding:0; overflow-x:auto">
+  <table style="margin:0">
+    <tr><th>When</th><th>Organisation</th><th>Subject</th><th>Status</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td class="muted" style="white-space:nowrap">{{ r.at[:16].replace('T', ' ') }}</td>
+      <td>
+        {% if r.task_id %}<a href="{{ url_for('task', task_id=r.task_id) }}">{{ r.name }}</a>{% else %}{{ r.name }}{% endif %}
+        <div class="muted" style="font-size:12px">{{ countries.get(r.country, r.country) }}{% if r.addr %} · {{ 'from' if r.dir == 'in' else 'to' }} {{ r.addr }}{% endif %}</div>
+      </td>
+      <td>
+        {% if r.dir == 'in' %}<span class="muted">Reply:</span> {% endif %}{{ r.subject or (r.body[:80] ~ ('...' if r.body|length > 80 else '')) }}
+      </td>
+      <td>
+        {% if r.dir == 'in' %}
+          {% if r.org_id in waiting %}<span class="pill waiting">waiting for you</span>{% else %}<span class="pill">answered</span>{% endif %}
+        {% elif r.bounce_reason %}
+          <span class="pill blocked">undelivered</span>
+          <div class="bad" style="font-size:12px; max-width:340px">{{ r.bounce_reason }}</div>
+        {% elif r.channel != 'email' %}
+          <span class="pill">{{ channels[r.channel][1] if r.channel in channels else r.channel }}</span>
+        {% elif r.org_id in replied %}
+          <span class="pill ready">replied</span>
+        {% else %}
+          <span class="pill">delivered</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">{{ 'Nothing here yet.' if show == 'all' else 'Nothing in this view.' }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% if total > rows|length %}<p class="muted">Showing the latest {{ rows|length }} of {{ total }}.</p>{% endif %}
+<p class="muted" style="font-size:12px">"Delivered" means no undelivered notice has come back. Replies and undelivered notices are picked up from the mailbox when this page opens.</p>
+{% endblock %}

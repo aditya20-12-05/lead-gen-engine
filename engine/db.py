@@ -171,6 +171,9 @@ MIGRATIONS = {
         "message_id": "TEXT",
         "channel": "TEXT NOT NULL DEFAULT 'email'",
         "body_html": "TEXT",
+        "to_addr": "TEXT",
+        "bounced_at": "TEXT",
+        "bounce_reason": "TEXT",
     },
     "inbound": {
         "task_id": "INTEGER REFERENCES tasks (id)",
@@ -347,7 +350,7 @@ def connect(target):
     return conn
 
 
-SCHEMA_VERSION = "7"
+SCHEMA_VERSION = "8"
 
 
 def init(conn):
