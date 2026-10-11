@@ -90,6 +90,14 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
         key = app.config["ACCESS_KEY"]
         if not key or request.path == "/healthz":
             return None
+        if request.path.startswith("/open/"):
+            given = request.path[len("/open/"):].strip("/")
+            if hmac.compare_digest(given.strip(), key):
+                response = redirect("/")
+                response.set_cookie(ACCESS_COOKIE, key, max_age=400 * 24 * 3600, httponly=True,
+                                    secure=request.is_secure, samesite="Lax")
+                return response
+            abort(404)
         given = request.args.get("key")
         if given is not None and hmac.compare_digest(given.strip(), key):
             args = {k: v for k, v in request.args.items() if k != "key"}
@@ -109,7 +117,10 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
 
     @app.get("/healthz")
     def healthz():
-        return "ok"
+        # Safe to show: no secrets, only whether they are set.
+        return (f"ok | access key set: {'yes' if app.config['ACCESS_KEY'] else 'no'}"
+                f" | database: {'postgres' if db.is_postgres_url(app.config['DB_PATH']) else 'sqlite'}"
+                f" | path seen: {request.path}"), 200, {"Content-Type": "text/plain"}
 
     def conn():
         if "conn" not in g:

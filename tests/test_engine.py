@@ -557,3 +557,29 @@ def test_zoho_mailbox_sends_and_catches_replies(client, conn, app):
     assert fake.calls[-1][1] == "https://mail.zoho.in/api/accounts/77/messages/555"
     assert fake.calls[-1][2]["action"] == "reply"
     assert sum(1 for c in fake.calls if c[1].endswith("/oauth/v2/token")) == 1  # token reused
+
+
+def test_open_link_sets_access_and_vercel_path_is_restored(target, tmp_path, monkeypatch):
+    import runpy
+
+    app = create_app(target, tmp_path / "none.json", access_key="s3cret-link")
+    client = app.test_client()
+    assert client.get("/open/wrong").status_code == 404
+    resp = client.get("/open/s3cret-link")
+    assert resp.status_code == 302 and resp.headers["Location"] == "/"
+    assert client.get("/results").status_code == 200
+    assert "path seen: /healthz" in client.get("/healthz").get_data(as_text=True)
+
+    monkeypatch.setenv("SELEQT_ACCESS_KEY", "s3cret-link")
+    monkeypatch.setenv("DATABASE_URL" if target.startswith("postgres") else "SELEQT_UNUSED", target)
+    monkeypatch.chdir(tmp_path)
+    entry = runpy.run_path(str(__import__("pathlib").Path(__file__).resolve().parent.parent / "api" / "index.py"))
+    from werkzeug.test import Client
+
+    vercel = Client(entry["app"])
+    resp = vercel.get("/api/index?__path=/open/s3cret-link")
+    assert resp.status_code == 302
+    resp = vercel.get("/api/index?__path=/calendar")
+    assert resp.status_code == 200 and b"Calendar" in resp.data
+    resp = vercel.get("/api/index?__path=/healthz&x=1")
+    assert b"path seen: /healthz" in resp.data
