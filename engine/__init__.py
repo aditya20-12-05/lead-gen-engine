@@ -64,7 +64,7 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
     )
     try:
         if os.environ.get("VERCEL") and not db.is_postgres_url(target):
-            raise RuntimeError("DATABASE_URL is not set for this deployment. Add it in Vercel and redeploy.")
+            raise RuntimeError("DATABASE_URL is missing or is not a Postgres link (it should start with postgresql://). Fix it in Vercel and redeploy.")
         if not db.is_postgres_url(target):
             Path(target).parent.mkdir(parents=True, exist_ok=True)
         with db.connect(app.config["DB_PATH"]) as conn:
