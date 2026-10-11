@@ -4,6 +4,7 @@ Structure: country > approach (a channel with SELEQT's brief) > task (one
 organisation, its brief, the plan and the email thread).
 """
 
+import hashlib
 import hmac
 import json
 import os
@@ -55,7 +56,9 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
         DB_PATH=str(target),
         SETTINGS_PATH=settings_path,
         SECRET_KEY=os.environ.get("SELEQT_SECRET_KEY") or secrets.token_hex(32),
-        ACCESS_KEY=(access_key if access_key is not None else os.environ.get("SELEQT_ACCESS_KEY", "")).strip() or None,
+        # Tolerate quotes or backticks pasted around the value in a hosting dashboard.
+        ACCESS_KEY=(access_key if access_key is not None
+                    else os.environ.get("SELEQT_ACCESS_KEY", "")).strip().strip("'\"`").strip() or None,
         MAILBOX=lambda settings: mailer.mailbox_from_env(settings.get("sender_name", drafts.DEFAULT_SETTINGS["sender_name"])),
         FETCH_PAGE=finder.fetch_page,
     )
@@ -118,7 +121,9 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
     @app.get("/healthz")
     def healthz():
         # Safe to show: no secrets, only whether they are set.
-        return (f"ok | access key set: {'yes' if app.config['ACCESS_KEY'] else 'no'}"
+        key = app.config["ACCESS_KEY"]
+        fingerprint = hashlib.sha256(key.encode()).hexdigest()[:8] if key else "none"
+        return (f"ok | access key set: {'yes' if key else 'no'} (fingerprint {fingerprint}, {len(key or '')} characters)"
                 f" | database: {'postgres' if db.is_postgres_url(app.config['DB_PATH']) else 'sqlite'}"
                 f" | path seen: {request.path}"), 200, {"Content-Type": "text/plain"}
 
