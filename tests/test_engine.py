@@ -549,6 +549,51 @@ def test_delete_contacted_organisation_keeps_the_no_second_contact_rule(client, 
     assert conn.execute("SELECT count(*) AS n FROM outreach WHERE task_id = ?", (new_tid,)).fetchone()["n"] == 0
 
 
+# Formatting (fonts, sizes, bold, lists)
+
+def test_sanitise_keeps_formatting_and_drops_everything_else():
+    from engine import richtext
+    dirty = ('<div><font face="Georgia, serif" size="4" color="red">Hello</font> <b onclick="x()">there</b>'
+             '<script>alert(1)</script><span style="font-family: Verdana; position: fixed; '
+             'background: url(evil)">!</span><a href="javascript:x()">link</a><img src=x></div>')
+    clean = richtext.sanitise(dirty)
+    assert '<font face="Georgia, serif" size="4">Hello</font>' in clean and "<b>there</b>" in clean
+    assert "script" not in clean and "alert" not in clean and "onclick" not in clean
+    assert 'style="font-family: Verdana"' in clean and "javascript" not in clean and "<img" not in clean
+    assert richtext.to_text("<div>Dear Editor,</div><div><br></div><ul><li>One</li><li>Two</li></ul>"
+                            "<ol><li>First</li></ol><div>Warm&nbsp;regards</div>") == \
+        "Dear Editor,\n\n- One\n- Two\n1. First\nWarm regards"
+    assert richtext.to_text(richtext.from_text("a\n\nb")) == "a\n\nb"
+
+
+def test_formatted_email_is_sent_with_html_and_plain_text(client, conn, app):
+    tid = task_id(conn, "Gujarati Samaj UAE")
+    client.post(f"/tasks/{tid}/compose", data={"action": "start"})
+    page = client.get(f"/tasks/{tid}").get_data(as_text=True)
+    assert 'id="editor"' in page and "Garamond" in page and "Warm regards" in page
+    html_body = ('<div><font face="Georgia, serif">Dear Committee,</font></div><div><br></div>'
+                 '<div><b>A free session</b> for members.</div><div>Test Founder</div><script>x</script>')
+    client.post(f"/tasks/{tid}/compose", data={"action": "send", "subject": "A free session",
+                                                "body_html": html_body, "reviewed": "yes"})
+    row = conn.execute("SELECT * FROM outreach WHERE task_id = ?", (tid,)).fetchone()
+    assert row["sent_at"] and row["body"] == "Dear Committee,\n\nA free session for members.\nTest Founder"
+    msg = app.config["SENT"][-1]
+    assert msg.get_body(("plain",)).get_content().strip() == row["body"]
+    html_part = msg.get_body(("html",)).get_content()
+    assert '<font face="Georgia, serif">' in html_part and "<b>A free session</b>" in html_part
+    assert "<script>" not in html_part
+
+
+def test_checks_still_apply_to_formatted_text(client, conn, app):
+    tid = task_id(conn, "Gujarati Samaj Qatar")
+    client.post(f"/tasks/{tid}/compose", data={"action": "start"})
+    client.post(f"/tasks/{tid}/compose", data={"action": "send", "subject": "Hello", "reviewed": "yes",
+                                                "body_html": "<div><i>Guaranteed returns</i> \u2014 seleqt</div>"})
+    assert app.config["SENT"] == []
+    page = client.get(f"/tasks/{tid}").get_data(as_text=True)
+    assert "em dash" in page and "guaranteed" in page and "SELEQT" in page
+
+
 # Secret link
 
 def test_secret_link_gates_every_page(target, tmp_path):

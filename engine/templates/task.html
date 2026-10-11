@@ -47,10 +47,57 @@
       <input type="hidden" name="language" value="en">
     </form>
   {% else %}
-    <form method="post" action="{{ url_for('compose', task_id=t.id) }}">
+    <form method="post" action="{{ url_for('compose', task_id=t.id) }}" id="compose-form">
       <p class="muted" style="margin-top:0">To {{ org.contact_email }}{% if mail_user %}, from {{ mail_user }}{% endif %}</p>
       <label>Subject</label><input name="subject" value="{{ draft.subject }}">
-      <label>Message</label><textarea name="body">{{ draft.body }}</textarea>
+      <label>Message</label>
+      <div class="editor-bar" role="toolbar" aria-label="Formatting">
+        <select id="ed-font" title="Font" aria-label="Font">
+          <option value="" selected disabled>Font</option>
+          {% for label, stack in fonts.items() %}<option value="{{ stack }}" style="font-family: {{ stack }}">{{ label }}</option>{% endfor %}
+        </select>
+        <select id="ed-size" title="Size" aria-label="Size">
+          <option value="" selected disabled>Size</option>
+          {% for label, value in sizes.items() %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+        </select>
+        <button type="button" class="tool" data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+        <button type="button" class="tool" data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+        <button type="button" class="tool" data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+        <button type="button" class="tool" data-cmd="insertUnorderedList" title="Bulleted list">&bull; List</button>
+        <button type="button" class="tool" data-cmd="insertOrderedList" title="Numbered list">1. List</button>
+        <button type="button" class="tool" data-cmd="removeFormat" title="Remove formatting">Clear formatting</button>
+      </div>
+      <div id="editor" class="editor" contenteditable="true" spellcheck="true">{{ draft_html|safe }}</div>
+      <input type="hidden" name="body_html" id="body_html">
+      <p class="muted" style="margin:4px 0 0; font-size:12px">Select text, then pick a font or size. To change the whole email, press Ctrl+A (Cmd+A on Mac) first.</p>
+      <script>
+      (function () {
+        var editor = document.getElementById('editor'), saved = null;
+        function remember() {
+          var sel = window.getSelection();
+          if (sel.rangeCount && editor.contains(sel.anchorNode)) saved = sel.getRangeAt(0).cloneRange();
+        }
+        function restore() {
+          editor.focus();
+          if (saved) { var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(saved); }
+        }
+        document.addEventListener('selectionchange', remember);
+        document.querySelectorAll('.editor-bar .tool').forEach(function (btn) {
+          btn.addEventListener('mousedown', function (e) { e.preventDefault(); });
+          btn.addEventListener('click', function () { restore(); document.execCommand(btn.dataset.cmd, false, null); remember(); });
+        });
+        [['ed-font', 'fontName'], ['ed-size', 'fontSize']].forEach(function (pair) {
+          var select = document.getElementById(pair[0]);
+          select.addEventListener('change', function () {
+            restore(); document.execCommand('styleWithCSS', false, false);
+            document.execCommand(pair[1], false, select.value); remember(); select.selectedIndex = 0;
+          });
+        });
+        document.getElementById('compose-form').addEventListener('submit', function () {
+          document.getElementById('body_html').value = editor.innerHTML;
+        });
+      })();
+      </script>
       {% if issues %}<div class="flash error">{% for i in issues %}{{ i }}<br>{% endfor %}</div>{% endif %}
       {% if draft.language == 'gu' %}<div class="flash error">Gujarati text: have a native speaker check it before sending.</div>{% endif %}
       {% if not mail_user %}<p class="muted">The mailbox is not connected, so Send is switched off. You can still save the draft.</p>{% endif %}

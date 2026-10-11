@@ -131,7 +131,7 @@ class MailConfig:
         )
 
 
-def build_message(config, to, subject, body, in_reply_to=None):
+def build_message(config, to, subject, body, in_reply_to=None, body_html=None):
     msg = EmailMessage()
     msg["From"] = formataddr((config.from_name, config.user)) if config.from_name else config.user
     msg["To"] = to
@@ -141,6 +141,8 @@ def build_message(config, to, subject, body, in_reply_to=None):
         msg["In-Reply-To"] = in_reply_to
         msg["References"] = in_reply_to
     msg.set_content(body)
+    if body_html:
+        msg.add_alternative(body_html, subtype="html")
     return msg
 
 
@@ -167,9 +169,9 @@ class SmtpMailbox:
         self._imap_factory = imap_factory or (lambda: imaplib.IMAP4_SSL(config.imap_host, config.imap_port))
         self._smtp_factory = smtp_factory
 
-    def send(self, to, subject, body, in_reply_to=None):
+    def send(self, to, subject, body, in_reply_to=None, body_html=None):
         config = self.config
-        msg = build_message(config, to, subject, body, in_reply_to)
+        msg = build_message(config, to, subject, body, in_reply_to, body_html)
         with self._smtp() as server:
             server.login(config.user, config.password)
             server.send_message(msg)
@@ -363,14 +365,14 @@ class ZohoMailbox:
             return self._account_id
         raise RuntimeError(f"No Zoho mail account found for {self.user}.")
 
-    def send(self, to, subject, body, in_reply_to=None):
+    def send(self, to, subject, body, in_reply_to=None, body_html=None):
         account = self._account()
         payload = {
             "fromAddress": f"{self.config.from_name} <{self.user}>" if self.config.from_name else self.user,
             "toAddress": to,
             "subject": subject,
-            "content": body,
-            "mailFormat": "plaintext",
+            "content": body_html or body,
+            "mailFormat": "html" if body_html else "plaintext",
         }
         if in_reply_to and in_reply_to.startswith("zoho:"):
             payload["action"] = "reply"

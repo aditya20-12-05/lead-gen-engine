@@ -17,7 +17,7 @@ from pathlib import Path
 from flask import Flask, abort, flash, g, redirect, render_template, request, url_for
 from markupsafe import escape
 
-from . import db, drafts, finder, importers, mailer, rules, seed, sources
+from . import db, drafts, finder, importers, mailer, richtext, rules, seed, sources
 
 ACCESS_COOKIE = "seleqt_access"
 
@@ -364,6 +364,8 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
         draft_row = current_draft(org["id"])
         return render_template(
             "task.html", t=t, org=org, thread=thread, status=status, draft=draft_row,
+            draft_html=(draft_row["body_html"] or richtext.from_text(draft_row["body"])) if draft_row else "",
+            fonts=richtext.FONTS, sizes=richtext.SIZES,
             issues=rules.copy_issues(draft_row["subject"] + "\n" + draft_row["body"]) if draft_row else [],
             usable=[ch for ch in rules.available_channels(org) if ch != "email"],
             templates=drafts.templates_for(t["template_kind"]) if t["template_kind"] else {},
@@ -384,21 +386,30 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
             flash(str(exc), "error")
             return redirect(url_for("task", task_id=task_id))
         subject = request.form.get("subject", existing["subject"] if existing else "")
-        body = request.form.get("body", existing["body"] if existing else "").replace("\r\n", "\n")
+        body_html = existing["body_html"] if existing else None
+        body = existing["body"] if existing else ""
+        if "body_html" in request.form:  # from the formatting editor
+            body_html = richtext.sanitise(request.form["body_html"])
+            body = richtext.to_text(body_html)
+        elif "body" in request.form:
+            body, body_html = request.form["body"].replace("\r\n", "\n"), None
         language = request.form.get("language", "en")
         if action == "template" and t["template_kind"]:
             subject, body = drafts.render_invite({**dict(org), "kind": t["template_kind"]}, language, settings())
+            body_html = None
         elif action == "start" and not existing:
             subject, body = (drafts.render_reply(org, "Your message", settings()) if kind == "reply"
                              else drafts.render_blank(settings()))
+            body_html = None
         if existing:
-            c.execute("UPDATE outreach SET subject = ?, body = ? WHERE id = ?", (subject, body, existing["id"]))
+            c.execute("UPDATE outreach SET subject = ?, body = ?, body_html = ? WHERE id = ?",
+                      (subject, body, body_html, existing["id"]))
             draft_id = existing["id"]
         else:
             draft_id = c.execute(
-                """INSERT INTO outreach (org_id, task_id, kind, channel, language, subject, body, drafted_at)
-                   VALUES (?, ?, ?, 'email', ?, ?, ?, ?)""",
-                (org["id"], task_id, kind, language, subject, body, db.now()),
+                """INSERT INTO outreach (org_id, task_id, kind, channel, language, subject, body, body_html, drafted_at)
+                   VALUES (?, ?, ?, 'email', ?, ?, ?, ?, ?)""",
+                (org["id"], task_id, kind, language, subject, body, body_html, db.now()),
             ).lastrowid
         c.commit()
         if action == "send":
@@ -481,7 +492,7 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
                 flash("Sent messages cannot be edited.", "error")
             else:
                 c.execute(
-                    "UPDATE outreach SET subject = ?, body = ? WHERE id = ?",
+                    "UPDATE outreach SET subject = ?, body = ?, body_html = NULL WHERE id = ?",
                     (request.form["subject"], request.form["body"].replace("\r\n", "\n"), outreach_id),
                 )
                 c.commit()
@@ -522,7 +533,8 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
                     "ORDER BY received_at DESC LIMIT 1", (org["id"],)
                 ).fetchone()
                 in_reply_to = last["message_id"] if last else None
-            message_id = box.send(org["contact_email"], row["subject"], row["body"], in_reply_to)
+            body_html = richtext.email_html(row["body_html"]) if row["body_html"] else None
+            message_id = box.send(org["contact_email"], row["subject"], row["body"], in_reply_to, body_html)
         except rules.RuleViolation as exc:
             return str(exc)
         except Exception as exc:  # network or login failure: nothing is marked sent
