@@ -20,9 +20,12 @@
   </details>
 
   <table style="margin-top:12px">
-    <tr><th>Organisation</th><th>Email</th><th>Status</th><th></th></tr>
+    <tr><th style="width:28px"><input type="checkbox" title="Select all that can be emailed" style="width:auto"
+         onclick="document.querySelectorAll('input[form=bulk-{{ a.id }}]').forEach(b => b.checked = this.checked); bulkCount({{ a.id }})"></th>
+        <th>Organisation</th><th>Email</th><th>Status</th><th></th></tr>
     {% for t in item.tasks %}
     <tr>
+      <td>{% if t.status in ('ready', 'draft') and t.org.contact_email %}<input type="checkbox" name="task" value="{{ t.task_id }}" form="bulk-{{ a.id }}" style="width:auto" onchange="bulkCount({{ a.id }})">{% endif %}</td>
       <td><a href="{{ url_for('task', task_id=t.task_id) }}">{{ t.org.name }}</a></td>
       <td class="muted">{{ t.org.contact_email or '' }}</td>
       <td>{{ status_pill(t.status) }}</td>
@@ -33,8 +36,12 @@
         </form>
       </td>
     </tr>
-    {% else %}<tr><td colspan="4" class="muted">No organisations yet.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="5" class="muted">No organisations yet.</td></tr>{% endfor %}
   </table>
+  <form method="get" action="{{ url_for('bulk', approach_id=a.id) }}" id="bulk-{{ a.id }}" style="margin-top:8px">
+    <button id="bulk-btn-{{ a.id }}" disabled>Email selected</button>
+    <span class="muted" style="font-size:12px">Tick organisations to write one email to all of them, sent separately.</span>
+  </form>
 
   <details style="margin-top:12px">
     <summary>Add an organisation</summary>
@@ -62,4 +69,12 @@
     <p><button>Add approach</button></p>
   </form>
 </details>
+<script>
+function bulkCount(id) {
+  var n = document.querySelectorAll('input[form=bulk-' + id + ']:checked').length;
+  var btn = document.getElementById('bulk-btn-' + id);
+  btn.disabled = n === 0;
+  btn.textContent = n ? 'Email selected (' + n + ')' : 'Email selected';
+}
+</script>
 {% endblock %}

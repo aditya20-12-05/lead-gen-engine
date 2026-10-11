@@ -616,6 +616,56 @@ def test_checks_still_apply_to_formatted_text(client, conn, app):
     assert "em dash" in page and "guaranteed" in page and "SELEQT" in page
 
 
+# Email several organisations at once
+
+def ae_webinars(conn):
+    return conn.execute("SELECT id FROM approaches WHERE country = 'AE' AND name = 'Community webinars'").fetchone()["id"]
+
+
+def test_bulk_sends_separate_personalised_emails_and_skips_contacted(client, conn, app):
+    aid = ae_webinars(conn)
+    uae, abu, dubai = (task_id(conn, n) for n in ("Gujarati Samaj UAE", "Gujarati Samaj Abu Dhabi", "Gujarati Samaj Dubai"))
+    send(client, make_draft(client, uae))  # already contacted
+    country = client.get("/countries/AE").get_data(as_text=True)
+    assert f'value="{abu}" form="bulk-{aid}"' in country and f'value="{uae}" form="bulk-{aid}"' not in country
+    page = client.get(f"/approaches/{aid}/bulk?task={uae}&task={abu}&task={dubai}").get_data(as_text=True)
+    assert "Already contacted once" in page and "Send to 2" in page and "{organisation}" in page
+    html_body = "<div>Dear Committee of {organisation},</div><div><b>A free session.</b></div><div>Test Founder</div>"
+    form = {"task": [str(uae), str(abu), str(dubai)], "subject": "A session for {organisation}", "body_html": html_body}
+    client.post(f"/approaches/{aid}/bulk", data=form)
+    assert len(app.config["SENT"]) == 1  # not ticked as reviewed: nothing more sent
+    resp = client.post(f"/approaches/{aid}/bulk", data={**form, "reviewed": "yes"})
+    assert resp.status_code == 302
+    sent = app.config["SENT"][1:]
+    assert sorted(m["To"] for m in sent) == ["admin@gujaratisamajdubai.com", "gujaratisamajabudhabi@yahoo.com"]
+    by_to = {m["To"]: m for m in sent}
+    dubai_msg = by_to["admin@gujaratisamajdubai.com"]
+    assert dubai_msg["Subject"] == "A session for Gujarati Samaj Dubai"
+    assert "Dear Committee of Gujarati Samaj Dubai," in dubai_msg.get_body(("plain",)).get_content()
+    assert "<b>A free session.</b>" in dubai_msg.get_body(("html",)).get_content()
+    for tid in (abu, dubai):
+        row = conn.execute("SELECT * FROM outreach WHERE task_id = ? AND sent_at IS NOT NULL", (tid,)).fetchone()
+        assert row["kind"] == "invite" and "{organisation}" not in row["body"]
+    # Nobody contacted twice: a second bulk send skips all of them.
+    client.post(f"/approaches/{aid}/bulk", data={**form, "reviewed": "yes"})
+    assert len(app.config["SENT"]) == 3
+
+
+def test_bulk_refuses_bad_copy_and_too_many(client, conn, app):
+    us = conn.execute("SELECT id FROM approaches WHERE country = 'US'").fetchone()["id"]
+    tasks = [str(r["id"]) for r in conn.execute(
+        """SELECT t.id FROM tasks t JOIN organisations g ON g.id = t.org_id
+           WHERE t.approach_id = ? AND g.contact_email IS NOT NULL""", (us,))]
+    assert len(tasks) > 10
+    form = {"task": tasks, "subject": "Hello", "body_html": "<div>Hello {organisation}</div>", "reviewed": "yes"}
+    page = client.post(f"/approaches/{us}/bulk", data=form).get_data(as_text=True)
+    assert "at most 10" in page and app.config["SENT"] == []
+    form = {**form, "task": tasks[:2], "body_html": "<div>Guaranteed returns for {organisation}</div>"}
+    page = client.post(f"/approaches/{us}/bulk", data=form).get_data(as_text=True)
+    assert "guaranteed" in page and app.config["SENT"] == []
+    assert "Guaranteed returns for" in page  # the email is kept on the page to fix
+
+
 # Secret link
 
 def test_secret_link_gates_every_page(target, tmp_path):

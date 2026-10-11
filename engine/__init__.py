@@ -321,6 +321,99 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
             return redirect(url_for("country", code=a["country"]) + f"#approach-{approach_id}")
         return redirect(url_for("country", code=a["country"]) + f"#approach-{approach_id}")
 
+    BULK_LIMIT = 10  # per press of Send: keeps within the server's time limit and the mailbox's sending pace
+    ORG_TOKEN = "{organisation}"
+
+    def bulk_recipients(approach_id, task_ids):
+        c = conn()
+        rows = tasks_for("t.approach_id = ? AND t.id IN (%s)" % ",".join("?" * len(task_ids)),
+                         (approach_id, *task_ids)) if task_ids else []
+        out = []
+        for t in rows:
+            org = t["org"]
+            reason = None
+            try:
+                rules.check_can_draft(c, org, "invite", "email")
+            except rules.RuleViolation as exc:
+                reason = str(exc)
+            out.append({"task_id": t["task_id"], "org": org, "reason": reason})
+        return out
+
+    def personalise(text, org_name, as_html=False):
+        name = escape(org_name) if as_html else org_name
+        return text.replace(ORG_TOKEN, str(name))
+
+    @app.route("/approaches/<int:approach_id>/bulk", methods=["GET", "POST"])
+    def bulk(approach_id):
+        """One email, written once, sent separately to each selected organisation."""
+        a = one("SELECT * FROM approaches WHERE id = ?", (approach_id,))
+        source = request.form if request.method == "POST" else request.args
+        task_ids = [int(x) for x in source.getlist("task") if x.isdigit()]
+        recipients = bulk_recipients(approach_id, task_ids)
+        ready = [r for r in recipients if not r["reason"]]
+        if request.method == "POST":
+            subject = request.form.get("subject", "").strip()
+            body_html = richtext.sanitise(request.form.get("body_html", ""))
+            body = richtext.to_text(body_html)
+            problems = []
+            if not ready:
+                problems.append("None of the selected organisations can be emailed.")
+            if len(ready) > BULK_LIMIT:
+                problems.append(f"Send to at most {BULK_LIMIT} at a time; untick some and send the rest next.")
+            if not subject:
+                problems.append("Add a subject.")
+            if request.form.get("reviewed") != "yes":
+                problems.append("Tick the box to confirm you have read the email before sending.")
+            if mailbox() is None:
+                problems.append("The mailbox is not connected.")
+            sample = ready[0]["org"]["name"] if ready else "Example"
+            problems += rules.copy_issues(personalise(subject + "\n" + body, sample))
+            if problems:
+                for p in problems:
+                    flash(p, "error")
+                return render_bulk(a, recipients, subject, body_html)
+            c = conn()
+            sent, failed = [], []
+            for r in ready:
+                org = r["org"]
+                draft_id = c.execute(
+                    """INSERT INTO outreach (org_id, task_id, kind, channel, language, subject, body, body_html, drafted_at)
+                       VALUES (?, ?, 'invite', 'email', 'en', ?, ?, ?, ?)""",
+                    (org["id"], r["task_id"], personalise(subject, org["name"]), personalise(body, org["name"]),
+                     personalise(body_html, org["name"], as_html=True), db.now()),
+                ).lastrowid
+                c.commit()
+                error = deliver(one("SELECT * FROM outreach WHERE id = ?", (draft_id,)), org, True)
+                if error:
+                    c.execute("DELETE FROM outreach WHERE id = ?", (draft_id,))
+                    failed.append(f"{org['name']} ({error})")
+                else:
+                    c.execute("DELETE FROM outreach WHERE org_id = ? AND sent_at IS NULL", (org["id"],))
+                    sent.append(org["name"])
+                c.commit()
+            if sent:
+                flash(f"Sent to {len(sent)}: " + ", ".join(sent) + ".", "ok")
+            if failed:
+                flash("Not sent: " + "; ".join(failed), "error")
+            skipped = [r["org"]["name"] for r in recipients if r["reason"]]
+            if skipped:
+                flash("Skipped: " + ", ".join(skipped) + ".", "error")
+            return redirect(url_for("country", code=a["country"]) + f"#approach-{approach_id}")
+        language = request.args.get("lang", "en")
+        if a["template_kind"] and request.args.get("start") != "blank":
+            subject, text = drafts.render_invite({"name": ORG_TOKEN, "kind": a["template_kind"]}, language, settings())
+        else:
+            subject, text = drafts.render_blank(settings())
+        return render_bulk(a, recipients, subject, richtext.from_text(text), language)
+
+    def render_bulk(a, recipients, subject, body_html, language="en"):
+        return render_template(
+            "bulk.html", a=a, recipients=recipients, subject=subject, body_html=body_html, language=language,
+            ready=[r for r in recipients if not r["reason"]], limit=BULK_LIMIT, token=ORG_TOKEN,
+            fonts=richtext.FONTS, sizes=richtext.SIZES,
+            templates=drafts.templates_for(a["template_kind"]) if a["template_kind"] else {},
+        )
+
     def current_draft(org_id):
         return conn().execute(
             "SELECT * FROM outreach WHERE org_id = ? AND sent_at IS NULL AND channel = 'email' "

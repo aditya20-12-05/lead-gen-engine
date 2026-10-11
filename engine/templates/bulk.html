@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% from "_macros.html" import editor %}
+{% block content %}
+<p class="muted"><a href="{{ url_for('overview') }}">Countries</a> / <a href="{{ url_for('country', code=a.country) }}#approach-{{ a.id }}">{{ countries.get(a.country, a.country) }}</a> / {{ a.name }}</p>
+<h1>Email several organisations</h1>
+<p class="muted">One email, sent separately to each organisation, so nobody sees the others' addresses. {{ token }} is replaced with each organisation's name.</p>
+
+<div class="card">
+  <h2 style="margin-top:0">Recipients ({{ ready|length }})</h2>
+  <table>
+    <tr><th>Organisation</th><th>Email</th><th></th></tr>
+    {% for r in recipients %}
+    <tr>
+      <td>{{ r.org.name }}</td>
+      <td class="muted">{{ r.org.contact_email or '' }}</td>
+      <td>{% if r.reason %}<span class="bad">Skipped: {{ r.reason }}</span>{% else %}<span class="pill ready">will be sent</span>{% endif %}</td>
+    </tr>
+    {% else %}<tr><td colspan="3" class="muted">Nothing selected. Go back and tick some organisations.</td></tr>{% endfor %}
+  </table>
+  {% if ready|length > limit %}<div class="flash error">Send to at most {{ limit }} at a time. Go back and untick some; send the rest next.</div>{% endif %}
+</div>
+
+{% if ready %}
+<div class="card">
+  {% if templates %}
+  <p style="margin-top:0">
+    {% for lang, tpl in templates.items() %}
+    <a class="muted" href="{{ url_for('bulk', approach_id=a.id, lang=lang) }}&{% for r in recipients %}task={{ r.task_id }}&{% endfor %}">Start from the {{ 'Gujarati' if lang == 'gu' else 'English' }} template</a> ·
+    {% endfor %}
+    <a class="muted" href="{{ url_for('bulk', approach_id=a.id, start='blank') }}&{% for r in recipients %}task={{ r.task_id }}&{% endfor %}">Start blank</a>
+  </p>
+  {% endif %}
+  <form method="post" action="{{ url_for('bulk', approach_id=a.id) }}" id="bulk-form">
+    {% for r in recipients %}<input type="hidden" name="task" value="{{ r.task_id }}">{% endfor %}
+    <p class="muted" style="margin-top:0">{% if mail_user %}From {{ mail_user }}{% endif %}</p>
+    <label>Subject</label><input name="subject" value="{{ subject }}">
+    <label>Message</label>
+    {{ editor(body_html, fonts, sizes, 'bulk-form') }}
+    {% if language == 'gu' %}<div class="flash error">Gujarati text: have a native speaker check it before sending.</div>{% endif %}
+    {% if mail_user %}
+      <label style="margin-top:12px"><input type="checkbox" name="reviewed" value="yes" style="width:auto"> I have read this email and it is ready to go to all {{ ready|length }}</label>
+      <p><button onclick='return confirm({{ ("Send this email separately to " ~ ready|length ~ " organisations?")|tojson }})'>Send to {{ ready|length }}</button></p>
+    {% else %}
+      <p class="muted">The mailbox is not connected, so Send is switched off.</p>
+    {% endif %}
+  </form>
+</div>
+{% endif %}
+{% endblock %}
