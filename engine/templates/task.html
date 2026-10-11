@@ -97,4 +97,9 @@
     <p><button class="secondary">Log reply</button></p>
   </form>
 </details>
+
+<form method="post" action="{{ url_for('delete_org', org_id=org.id) }}" style="margin-top:24px"
+      onsubmit='return confirm({{ ("Delete " ~ org.name ~ "? This removes it from every approach.")|tojson }})'>
+  <button class="secondary" style="background:#9b2c2c">Delete this organisation</button>
+</form>
 {% endblock %}

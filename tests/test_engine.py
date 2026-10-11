@@ -520,6 +520,35 @@ def test_contacted_another_way_counts_as_first_contact(client, conn):
     assert len(rows) == 1 and rows[0]["sent_at"] and rows[0]["channel"] == "phone"
 
 
+def test_delete_organisation_never_contacted(client, conn):
+    tid = task_id(conn, "Namaskar Gujarat")
+    oid = org_id(conn, "Namaskar Gujarat")
+    client.post(f"/tasks/{tid}/compose", data={"action": "start"})  # no email: refused, nothing saved
+    resp = client.post(f"/orgs/{oid}/delete")
+    assert resp.status_code == 302 and resp.headers["Location"].endswith("/countries/AU")
+    assert conn.execute("SELECT 1 FROM organisations WHERE id = ?", (oid,)).fetchone() is None
+    assert conn.execute("SELECT 1 FROM tasks WHERE id = ?", (tid,)).fetchone() is None
+    assert f"/tasks/{tid}" not in client.get("/countries/AU").get_data(as_text=True)
+
+
+def test_delete_contacted_organisation_keeps_the_no_second_contact_rule(client, conn, app):
+    tid = task_id(conn, "Gujarati Samaj UAE")
+    oid = org_id(conn, "Gujarati Samaj UAE")
+    send(client, make_draft(client, tid))
+    app.config["IMAP"].messages = [reply("gujaratisamajemirates@gmail.com", "Thanks.")]
+    client.post("/mail/check")
+    client.post(f"/orgs/{oid}/delete")
+    assert f"/tasks/{tid}\"" not in client.get("/countries/AE").get_data(as_text=True)
+    assert conn.execute("SELECT count(*) AS n FROM tasks WHERE org_id = ?", (oid,)).fetchone()["n"] == 0
+    # Added again under a new name with the same email: still blocked.
+    ae = conn.execute("SELECT id FROM approaches WHERE country = 'AE'").fetchone()["id"]
+    client.post(f"/approaches/{ae}", data={"action": "add_task", "name": "GS UAE", "kind": "community",
+                                           "source_url": "https://x", "contact_email": "gujaratisamajemirates@gmail.com"})
+    new_tid = task_id(conn, "GS UAE")
+    client.post(f"/tasks/{new_tid}/compose", data={"action": "start"})
+    assert conn.execute("SELECT count(*) AS n FROM outreach WHERE task_id = ?", (new_tid,)).fetchone()["n"] == 0
+
+
 # Secret link
 
 def test_secret_link_gates_every_page(target, tmp_path):

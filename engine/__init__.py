@@ -609,6 +609,33 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
             return
         run_mail_check(box)
 
+    @app.post("/orgs/<int:org_id>/delete")
+    def delete_org(org_id):
+        """Delete an organisation. If we ever contacted it, keep that history hidden
+        so the nobody-contacted-twice rule still holds if it is added again."""
+        c = conn()
+        org = get_org(org_id)
+        task_ids = [r["id"] for r in c.execute("SELECT id FROM tasks WHERE org_id = ?", (org_id,))]
+        for tid in task_ids:
+            for table in ("outreach", "inbound", "calendar_items"):
+                c.execute(f"UPDATE {table} SET task_id = NULL WHERE task_id = ?", (tid,))
+        c.execute("DELETE FROM outreach WHERE org_id = ? AND sent_at IS NULL", (org_id,))
+        c.execute("DELETE FROM tasks WHERE org_id = ?", (org_id,))
+        c.execute("DELETE FROM contact_suggestions WHERE org_id = ?", (org_id,))
+        history = c.execute(
+            "SELECT 1 FROM outreach WHERE org_id = ? UNION SELECT 1 FROM inbound WHERE org_id = ?", (org_id, org_id)
+        ).fetchone()
+        if history:
+            flash(f"Deleted {org['name']}. We had contacted them, so that record is kept in the background "
+                  "and they will not be contacted twice.", "ok")
+        else:
+            c.execute("UPDATE events SET host_org_id = NULL WHERE host_org_id = ?", (org_id,))
+            c.execute("UPDATE enquiries SET source_org_id = NULL WHERE source_org_id = ?", (org_id,))
+            c.execute("DELETE FROM organisations WHERE id = ?", (org_id,))
+            flash(f"Deleted {org['name']}.", "ok")
+        c.commit()
+        return redirect(url_for("country", code=org["country"]))
+
     @app.post("/orgs/<int:org_id>/inbound")
     def log_inbound(org_id):
         """For replies that arrive by phone, WhatsApp or another inbox."""
