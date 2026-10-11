@@ -75,18 +75,30 @@ def contacted_orgs(conn):
     ).fetchall()
 
 
-def store_reply(conn, row, message_id, subject, body, summary):
+def sent_message_ids(conn):
+    """Message-IDs of the emails we sent, so replies can be matched by thread."""
+    rows = conn.execute(
+        """SELECT o.message_id, o.org_id, o.task_id, lower(g.contact_email) AS email
+           FROM outreach o JOIN organisations g ON g.id = o.org_id
+           WHERE o.sent_at IS NOT NULL AND o.channel = 'email' AND o.message_id IS NOT NULL"""
+    ).fetchall()
+    return {r["message_id"].strip(): r for r in rows}
+
+
+def store_reply(conn, row, message_id, subject, body, summary, from_addr=None):
+    from_addr = from_addr or row["email"]
     cur = conn.execute(
         """INSERT OR IGNORE INTO inbound
            (org_id, task_id, received_at, channel, body, message_id, from_addr, subject)
            VALUES (?, ?, ?, 'email', ?, ?, ?, ?)""",
-        (row["org_id"], row["task_id"], now(), body, message_id, row["email"], subject),
+        (row["org_id"], row["task_id"], now(), body, message_id, from_addr, subject),
     )
     if cur.rowcount:
         summary["new"] += 1
         if is_opt_out(body):
-            rules.add_dnc(conn, "email", row["email"], "Asked not to be contacted (reply detected)")
-            summary["opt_outs"].append(row["email"])
+            for address in {row["email"], from_addr} - {None, ""}:
+                rules.add_dnc(conn, "email", address, "Asked not to be contacted (reply detected)")
+                summary["opt_outs"].append(address)
 
 
 # SMTP and IMAP
@@ -169,27 +181,62 @@ class SmtpMailbox:
         return msg["Message-ID"]
 
     def fetch_replies(self, conn):
-        summary = {"new": 0, "opt_outs": []}
+        """Read-only pass over the inbox since our first email.
+
+        A message counts as a reply when it answers one of our emails (In-Reply-To
+        or References carries our Message-ID), whoever sent it, or when it comes
+        from the address we wrote to. Our own sent copies are skipped.
+        """
+        summary = {"new": 0, "opt_outs": [], "looked_for": []}
         contacted = contacted_orgs(conn)
         if not contacted:
             return summary
+        by_email = {r["email"]: r for r in contacted}
+        by_message = sent_message_ids(conn)
+        summary["looked_for"] = sorted(by_email)
+        since = min(r["first_sent"] for r in contacted)
         imap = self._imap_factory()
         try:
             imap.login(self.config.user, self.config.password)
             imap.select("INBOX", readonly=True)
-            for row in contacted:
-                status, data = imap.search(None, "FROM", f'"{row["email"]}"', "SINCE", _imap_date(row["first_sent"]))
+            status, data = imap.search(None, "SINCE", _imap_date(since))
+            nums = data[0].split() if status == "OK" and data and data[0] else []
+            matched = []
+            for chunk in range(0, len(nums), 200):
+                status, parts = imap.fetch(
+                    b",".join(nums[chunk:chunk + 200]),
+                    "(BODY.PEEK[HEADER.FIELDS (FROM MESSAGE-ID IN-REPLY-TO REFERENCES)])",
+                )
                 if status != "OK":
                     continue
-                for num in data[0].split():
-                    status, parts = imap.fetch(num, "(BODY.PEEK[])")
-                    if status != "OK" or not parts or not isinstance(parts[0], tuple):
+                for part in parts or []:
+                    if not isinstance(part, tuple):
                         continue
-                    message = email.message_from_bytes(parts[0][1], policy=email.policy.default)
-                    if parseaddr(message.get("From", ""))[1].lower() != row["email"]:
+                    num = part[0].split()[0]
+                    headers = email.message_from_bytes(part[1], policy=email.policy.default)
+                    message_id = (headers.get("Message-ID") or "").strip()
+                    if message_id in by_message:
+                        continue  # our own email (a copy to ourselves)
+                    refs = re.findall(r"<[^>]+>", f"{headers.get('In-Reply-To', '')} {headers.get('References', '')}")
+                    row = next((by_message[ref] for ref in refs if ref in by_message), None)
+                    sender = parseaddr(str(headers.get("From", "")))[1].lower()
+                    if row is None:
+                        row = by_email.get(sender)
+                    if row is None or sender == self.config.user.lower() and not refs:
                         continue
-                    message_id = (message.get("Message-ID") or "").strip() or None
-                    store_reply(conn, row, message_id, str(message.get("Subject", "")), plain_text(message), summary)
+                    if message_id and conn.execute(
+                        "SELECT 1 FROM inbound WHERE message_id = ?", (message_id,)
+                    ).fetchone():
+                        continue
+                    matched.append((num, row, sender))
+            for num, row, sender in matched:
+                status, parts = imap.fetch(num, "(BODY.PEEK[])")
+                if status != "OK" or not parts or not isinstance(parts[0], tuple):
+                    continue
+                message = email.message_from_bytes(parts[0][1], policy=email.policy.default)
+                message_id = (message.get("Message-ID") or "").strip() or None
+                store_reply(conn, row, message_id, str(message.get("Subject", "")), plain_text(message), summary,
+                            from_addr=sender)
             conn.commit()
         finally:
             try:

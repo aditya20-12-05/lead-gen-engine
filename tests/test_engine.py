@@ -44,13 +44,16 @@ class FakeIMAP:
         return "OK", [b"1"]
 
     def search(self, charset, *criteria):
-        sender = criteria[1].strip('"')
-        nums = [str(i + 1).encode() for i, m in enumerate(self.messages) if sender in m["From"].lower()]
-        return "OK", [b" ".join(nums)]
+        assert criteria[0] == "SINCE"
+        return "OK", [b" ".join(str(i + 1).encode() for i in range(len(self.messages)))]
 
-    def fetch(self, num, spec):
+    def fetch(self, nums, spec):
         assert "PEEK" in spec
-        return "OK", [(b"1", self.messages[int(num) - 1].as_bytes())]
+        nums = nums.decode() if isinstance(nums, bytes) else nums
+        parts = []
+        for num in nums.split(","):
+            parts += [(f"{num} (BODY[] {{1}}".encode(), self.messages[int(num) - 1].as_bytes()), b")"]
+        return "OK", parts
 
     def logout(self):
         pass
@@ -285,9 +288,11 @@ def test_dnc_has_no_delete_route(client):
 
 # Catching replies
 
-def reply(sender, body, message_id="<r1@example.com>", subject="Re: session"):
+def reply(sender, body, message_id="<r1@example.com>", subject="Re: session", in_reply_to=None):
     m = EmailMessage()
     m["From"], m["To"], m["Subject"], m["Message-ID"] = sender, "ishit@seleqtwealth.in", subject, message_id
+    if in_reply_to:
+        m["In-Reply-To"] = in_reply_to
     m.set_content(body)
     return m
 
@@ -297,7 +302,8 @@ def test_replies_are_caught_once_and_unlock_a_reply_draft(client, conn, app):
     send(client, make_draft(client, tid))
     app.config["IMAP"].messages = [reply("Committee <gujaratisamajemirates@gmail.com>", "Yes, please propose a date in November.")]
     box = app.config["MAILBOX"](SETTINGS)
-    assert box.fetch_replies(conn) == {"new": 1, "opt_outs": []}
+    result = box.fetch_replies(conn)
+    assert result["new"] == 1 and result["opt_outs"] == [] and result["looked_for"] == ["gujaratisamajemirates@gmail.com"]
     assert box.fetch_replies(conn)["new"] == 0  # no duplicates
     rid = make_draft(client, tid, kind="reply")
     assert rid is not None
@@ -319,6 +325,32 @@ def test_mail_from_strangers_is_ignored(conn, client, app):
     send(client, make_draft(client, task_id(conn, "Gujarati Samaj UAE")))
     app.config["IMAP"].messages = [reply("someone.else@example.com", "hello")]
     assert app.config["MAILBOX"](SETTINGS).fetch_replies(conn)["new"] == 0
+
+
+def test_reply_from_another_address_is_caught_by_thread(conn, client, app):
+    did = make_draft(client, task_id(conn, "Gujarati Samaj UAE"))
+    send(client, did)
+    ours = conn.execute("SELECT message_id FROM outreach WHERE id = ?", (did,)).fetchone()[0]
+    app.config["IMAP"].messages = [
+        app.config["SENT"][-1],  # a copy of our own email in the inbox is not a reply
+        reply("Secretary <secretary.personal@example.com>", "Happy to host in November.", in_reply_to=ours),
+    ]
+    assert app.config["MAILBOX"](SETTINGS).fetch_replies(conn)["new"] == 1
+    row = conn.execute("SELECT org_id, from_addr FROM inbound").fetchone()
+    assert row["org_id"] == org_id(conn, "Gujarati Samaj UAE") and row["from_addr"] == "secretary.personal@example.com"
+
+
+def test_pages_check_for_replies_on_their_own(conn, client, app):
+    tid = task_id(conn, "Gujarati Samaj UAE")
+    send(client, make_draft(client, tid))
+    app.config["IMAP"].messages = [reply("gujaratisamajemirates@gmail.com", "Yes please.")]
+    page = client.get(f"/tasks/{tid}").get_data(as_text=True)
+    assert "Yes please." in page
+    app.config["IMAP"].messages.append(reply("gujaratisamajemirates@gmail.com", "One more thing.", message_id="<r2@x>"))
+    client.get(f"/tasks/{tid}")
+    assert conn.execute("SELECT count(*) AS n FROM inbound").fetchone()["n"] == 1  # throttled
+    client.post("/mail/check")  # the button always checks
+    assert conn.execute("SELECT count(*) AS n FROM inbound").fetchone()["n"] == 2
 
 
 # Registrations and follow-up

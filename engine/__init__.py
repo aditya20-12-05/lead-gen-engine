@@ -9,6 +9,7 @@ import hmac
 import json
 import os
 import secrets
+import time
 import threading
 from datetime import date, timedelta
 from pathlib import Path
@@ -222,6 +223,7 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
 
     @app.get("/")
     def overview():
+        auto_check_mail()
         c = conn()
         summary = {}
         all_tasks = tasks_for("1 = 1", ())
@@ -339,6 +341,7 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
             c.commit()
             flash("Saved.", "ok")
             return redirect(url_for("task", task_id=task_id))
+        auto_check_mail()
         thread = c.execute(
             """SELECT 'out' AS dir, id, kind, channel, subject, body, sent_at AS at, sent_at, sent_by
                FROM outreach WHERE org_id = ? AND sent_at IS NOT NULL
@@ -567,15 +570,44 @@ def create_app(db_path=None, settings_path="data/settings.json", access_key=None
         if box is None:
             flash("The mailbox is not connected.", "error")
         else:
-            try:
-                result = box.fetch_replies(conn())
-                message = f"{result['new']} new repl{'y' if result['new'] == 1 else 'ies'}."
-                if result["opt_outs"]:
-                    message += " Added to do not contact: " + ", ".join(result["opt_outs"]) + "."
-                flash(message, "ok")
-            except Exception as exc:
-                flash(f"Could not check the mailbox: {exc}", "error")
+            run_mail_check(box, announce_nothing=True)
         return redirect(request.form.get("next") or url_for("overview"))
+
+    def run_mail_check(box, announce_nothing=False):
+        c = conn()
+        c.execute("DELETE FROM meta WHERE key = 'mail_checked_at'")
+        c.execute("INSERT INTO meta (key, value) VALUES ('mail_checked_at', ?)", (str(time.time()),))
+        c.commit()
+        try:
+            result = box.fetch_replies(c)
+        except Exception as exc:
+            c.rollback()
+            flash(f"Could not check the mailbox for replies: {exc}", "error")
+            return
+        if result["new"]:
+            message = f"{result['new']} new repl{'y' if result['new'] == 1 else 'ies'}."
+            if result["opt_outs"]:
+                message += " Added to do not contact: " + ", ".join(result["opt_outs"]) + "."
+            flash(message, "ok")
+        elif announce_nothing:
+            looked = result.get("looked_for")
+            flash("No new replies." + (
+                f" Looked in the inbox for answers to our emails and for mail from {', '.join(looked)}."
+                if looked else " Nothing has been emailed yet, so there is nothing to look for."), "ok")
+
+    def auto_check_mail():
+        """Look for replies when a page opens, at most every two minutes, so nobody has to remember."""
+        box = mailbox()
+        if box is None:
+            return
+        row = conn().execute("SELECT value FROM meta WHERE key = 'mail_checked_at'").fetchone()
+        if row and time.time() - float(row[0]) < 120:
+            return
+        if not conn().execute(
+            "SELECT 1 FROM outreach WHERE sent_at IS NOT NULL AND channel = 'email' LIMIT 1"
+        ).fetchone():
+            return
+        run_mail_check(box)
 
     @app.post("/orgs/<int:org_id>/inbound")
     def log_inbound(org_id):
