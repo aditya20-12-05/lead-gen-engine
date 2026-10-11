@@ -279,12 +279,24 @@ LIBPQ_PARAMS = {"sslmode", "sslrootcert", "connect_timeout", "application_name",
 
 
 def clean_url(url):
-    """Drop query parameters libpq does not know (Vercel's Supabase URLs add some)."""
-    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    """Drop query parameters libpq does not know (Vercel's Supabase URLs add some).
 
-    parts = urlsplit(url)
-    query = [(k, v) for k, v in parse_qsl(parts.query) if k in LIBPQ_PARAMS]
-    return urlunsplit(parts._replace(query=urlencode(query)))
+    Splits on "?" by hand: urllib's parser rejects passwords containing brackets.
+    """
+    from urllib.parse import parse_qsl, urlencode
+
+    base, _, query = url.partition("?")
+    kept = [(k, v) for k, v in parse_qsl(query) if k in LIBPQ_PARAMS]
+    return f"{base}?{urlencode(kept)}" if kept else base
+
+
+def check_url(url):
+    """Catch the common copy-paste mistakes in a database URL before connecting."""
+    userinfo = url.split("://", 1)[-1].rpartition("@")[0]
+    if "YOUR-PASSWORD" in userinfo:
+        raise ValueError("The database URL still contains [YOUR-PASSWORD]; put the real password there.")
+    if "[" in userinfo or "]" in userinfo:
+        raise ValueError("The database URL has square brackets around the password; remove the [ and ].")
 
 
 def is_postgres_url(target):
@@ -293,6 +305,7 @@ def is_postgres_url(target):
 
 def connect(target):
     if is_postgres_url(target):
+        check_url(str(target))
         return PgConnection(clean_url(str(target)))
     conn = sqlite3.connect(target)
     conn.row_factory = sqlite3.Row
