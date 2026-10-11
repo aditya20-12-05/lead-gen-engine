@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Do not contact</h1>
+<p class="muted">Permanent. Entries cannot be removed from the app. Checked before every draft, every send and every import.</p>
+<form method="post" class="card">
+  <div class="grid">
+    <div><label>Type</label><select name="kind"><option value="email">Email</option><option value="domain">Domain (organisation only)</option><option value="name">Name</option><option value="phone">Phone</option></select></div>
+    <div><label>Value</label><input name="value" required></div>
+    <div><label>Reason</label><input name="reason" required></div>
+  </div>
+  <p><button>Add permanently</button></p>
+</form>
+<table>
+  <tr><th>Type</th><th>Value</th><th>Reason</th><th>Added</th></tr>
+  {% for r in rows %}<tr><td>{{ r.kind }}</td><td>{{ r.value }}</td><td>{{ r.reason }}</td><td class="muted">{{ r.added_at }}</td></tr>{% endfor %}
+</table>
+{% endblock %}

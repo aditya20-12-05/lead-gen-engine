@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ ev.title }}</h1>
+<p class="muted">{{ ev.starts_at }} · {{ ev.language }} · {{ ev.cohort }}{% if ev.platform %} · {{ ev.platform }}{% endif %}</p>
+
+<h2>Import registrations</h2>
+<form method="post" enctype="multipart/form-data" class="card">
+  <p class="muted">CSV columns: name, email, country (two-letter code such as AE or GB), consent_followup (yes or no), consent_text (the exact wording they agreed to). Do-not-contact entries are skipped.</p>
+  <input type="file" name="csv" accept=".csv">
+  <p><button>Import</button></p>
+</form>
+
+<h2>Registrations ({{ regs|length }})</h2>
+<table>
+  <tr><th>Name</th><th>Email</th><th>Country</th><th>Follow-up</th></tr>
+  {% for r in regs %}
+  <tr>
+    <td>{{ r.name }}</td><td>{{ r.email }}</td><td>{{ countries.get(r.country, r.country) }}</td>
+    <td>
+      {% if r.followed_up_at %}<span class="muted">followed up {{ r.followed_up_at }}</span>
+      {% elif followup[r.id] %}
+        <form method="post" action="{{ url_for('followed_up', reg_id=r.id) }}" class="inline"><button class="secondary">Mark the one follow-up as sent</button></form>
+      {% elif not r.consent_followup %}<span class="muted">no consent: joining details only</span>
+      {% else %}<span class="muted">Gulf resident: reply only if they write first</span>{% endif %}
+    </td>
+  </tr>
+  {% else %}<tr><td colspan="4" class="muted">No registrations yet.</td></tr>{% endfor %}
+</table>
+{% endblock %}

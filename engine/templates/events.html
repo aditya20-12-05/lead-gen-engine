@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Webinars</h1>
+<table>
+  <tr><th>When</th><th>Title</th><th>Language</th><th>Cohort</th><th>Host body</th><th>Registered</th></tr>
+  {% for e in rows %}
+  <tr>
+    <td>{{ e.starts_at }}</td>
+    <td><a href="{{ url_for('event', event_id=e.id) }}">{{ e.title }}</a></td>
+    <td>{{ e.language }}</td><td>{{ e.cohort }}</td><td>{{ e.host_name or 'SELEQT' }}</td><td>{{ e.registered }}</td>
+  </tr>
+  {% else %}<tr><td colspan="6" class="muted">None yet.</td></tr>{% endfor %}
+</table>
+
+<h2>Schedule a webinar</h2>
+<form method="post" class="card">
+  <label>Title</label><input name="title" value="{{ default_title }}">
+  <div class="grid">
+    <div><label>Date and time (with time zone)</label><input name="starts_at" placeholder="2026-11-21 19:00 GST" required></div>
+    <div><label>Language</label><select name="language"><option>Gujarati</option><option>English</option></select></div>
+    <div><label>Cohort</label><input name="cohort" placeholder="Gujarati Samaj UAE members" required></div>
+    <div><label>Host body (if they invite their members)</label><select name="host_org_id"><option value="">SELEQT</option>{% for o in orgs %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}</select></div>
+    <div><label>Platform</label><input name="platform" placeholder="Google Meet"></div>
+  </div>
+  <p><button>Save</button></p>
+</form>
+{% endblock %}

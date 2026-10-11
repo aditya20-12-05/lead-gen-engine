@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ 'Invitation' if row.kind == 'invite' else 'Reply' }} to {{ org.name }}</h1>
+<p class="muted">To: {{ org.contact_email }} · drafted {{ row.drafted_at }}{% if row.sent_at %} · sent {{ row.sent_at }} by {{ row.sent_by }}{% endif %}</p>
+
+{% if needs_native_review %}<div class="flash error">Gujarati draft: have a native speaker review it before sending.</div>{% endif %}
+{% if issues %}
+<div class="flash error"><strong>Fix before sending:</strong><ul>{% for i in issues %}<li>{{ i }}</li>{% endfor %}</ul></div>
+{% elif not row.sent_at %}
+<div class="flash ok">Copy passes house style, SEBI red flag and placeholder checks.</div>
+{% endif %}
+
+<form method="post" class="card">
+  <label>Subject</label><input name="subject" id="subject" value="{{ row.subject }}" {% if row.sent_at %}readonly{% endif %}>
+  <label>Body</label><textarea name="body" id="body" {% if row.sent_at %}readonly{% endif %}>{{ row.body }}</textarea>
+  {% if not row.sent_at %}<p><button>Save and recheck</button></p>{% endif %}
+</form>
+
+{% if not row.sent_at %}
+<div class="card">
+  <p><button type="button" class="secondary" onclick="navigator.clipboard.writeText(document.getElementById('subject').value)">Copy subject</button>
+     <button type="button" class="secondary" onclick="navigator.clipboard.writeText(document.getElementById('body').value)">Copy body</button>
+     <span class="muted">Send it yourself from the official mailbox, then record it here.</span></p>
+  <form method="post" action="{{ url_for('mark_sent', outreach_id=row.id) }}">
+    <label>Sent by</label><input name="sent_by" required>
+    <p><button>I have sent this</button></p>
+  </form>
+  <form method="post" action="{{ url_for('discard', outreach_id=row.id) }}" class="inline">
+    <button class="secondary">Discard draft</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

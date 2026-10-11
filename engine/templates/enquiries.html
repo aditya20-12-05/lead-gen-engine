@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Enquiries</h1>
+<p class="muted">Only people who contacted SELEQT first. Their first message is kept word for word as evidence. Each family goes to one side only: RIA or MFD.</p>
+
+<table>
+  <tr><th>First contact</th><th>Name</th><th>Country</th><th>Ticket fit</th><th>First message</th><th>Side</th></tr>
+  {% for e in rows %}
+  <tr>
+    <td class="muted">{{ e.first_contact_at }}<br>{{ e.first_contact_channel }}</td>
+    <td>{{ e.name }}<br><span class="muted">{{ e.email or '' }}</span></td>
+    <td>{{ countries.get(e.country, e.country) }}{% if e.citizenship %}<br><span class="muted">{{ e.citizenship }}{% if e.oci == 1 %}, OCI{% endif %}</span>{% endif %}</td>
+    <td>{{ e.ticket_fit }}</td>
+    <td><pre>{{ e.first_message }}</pre></td>
+    <td>
+      <form method="post" action="{{ url_for('set_route', enquiry_id=e.id) }}">
+        <select name="route" onchange="this.form.submit()">
+          {% for r in ['undecided', 'RIA', 'MFD'] %}<option {% if e.route == r %}selected{% endif %}>{{ r }}</option>{% endfor %}
+        </select>
+      </form>
+    </td>
+  </tr>
+  {% else %}<tr><td colspan="6" class="muted">No enquiries yet.</td></tr>{% endfor %}
+</table>
+
+<h2>Log an enquiry</h2>
+<form method="post" class="card">
+  <label><input type="checkbox" name="initiated_by_client" value="yes" style="width:auto"> This person contacted SELEQT first</label>
+  <div class="grid">
+    <div><label>Name</label><input name="name" required></div>
+    <div><label>Email</label><input name="email" type="email"></div>
+    <div><label>Phone</label><input name="phone"></div>
+    <div><label>Country of residence</label><select name="country">{% for code, label in countries.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}</select></div>
+    <div><label>Citizenship</label><input name="citizenship" placeholder="Indian, British, Kenyan"></div>
+    <div><label>OCI card</label><select name="oci"><option value="">unknown</option><option value="yes">yes</option><option value="no">no</option></select></div>
+    <div><label>Family key (same for all members of one family)</label><input name="family_key" placeholder="defaults to email"></div>
+    <div><label>Side</label><select name="route"><option>undecided</option><option>RIA</option><option>MFD</option></select></div>
+    <div><label>Ticket fit</label><select name="ticket_fit"><option value="unknown">unknown</option><option value="lump_sum">Rs 1 crore lump sum</option><option value="sip">Rs 1 lakh a month SIP</option><option value="below">below minimum</option></select></div>
+    <div><label>Channel</label><select name="first_contact_channel"><option>email</option><option>phone</option><option>whatsapp</option><option>webinar Q&amp;A</option><option>in person</option><option>linkedin</option></select></div>
+    <div><label>Came via webinar</label><select name="source_event_id"><option value="">none</option>{% for e in evs %}<option value="{{ e.id }}">{{ e.starts_at }}: {{ e.title }}</option>{% endfor %}</select></div>
+    <div><label>Came via organisation</label><select name="source_org_id"><option value="">none</option>{% for o in orgs %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}</select></div>
+  </div>
+  <label>Their first message, word for word</label><textarea name="first_message" style="min-height:120px" required></textarea>
+  <label>Notes</label><input name="notes">
+  <p><button>Log enquiry</button></p>
+</form>
+{% endblock %}

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Today</h1>
+
+<h2>Replies owed ({{ awaiting|length }})</h2>
+{% if awaiting %}
+<table>
+  <tr><th>Organisation</th><th>Country</th></tr>
+  {% for org in awaiting %}
+  <tr><td><a href="{{ url_for('organisation', org_id=org.id) }}">{{ org.name }}</a></td><td>{{ countries.get(org.country, org.country) }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">Nobody is waiting on a reply.</p>{% endif %}
+
+<h2>Drafts not yet sent ({{ unsent|length }})</h2>
+{% if unsent %}
+<table>
+  <tr><th>Organisation</th><th>Type</th><th>Subject</th></tr>
+  {% for d in unsent %}
+  <tr><td>{{ d.org_name }}</td><td>{{ d.kind }}</td><td><a href="{{ url_for('outreach', outreach_id=d.id) }}">{{ d.subject }}</a></td></tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">No open drafts.</p>{% endif %}
+
+<h2>Ready for a first invitation ({{ ready|length }})</h2>
+{% if ready %}
+<table>
+  <tr><th>Organisation</th><th>Country</th><th>Source status</th></tr>
+  {% for org in ready %}
+  <tr>
+    <td><a href="{{ url_for('organisation', org_id=org.id) }}">{{ org.name }}</a></td>
+    <td>{{ countries.get(org.country, org.country) }}</td>
+    <td class="{{ 'good' if (org.source_status or '').startswith('ok') else 'bad' }}">{{ org.source_status or 'not checked yet' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">Nothing ready.</p>{% endif %}
+
+<h2>Blocked ({{ blocked|length }})</h2>
+{% if blocked %}
+<table>
+  <tr><th>Organisation</th><th>Why</th></tr>
+  {% for org, why in blocked %}
+  <tr><td><a href="{{ url_for('organisation', org_id=org.id) }}">{{ org.name }}</a></td><td>{{ why }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">Nothing blocked.</p>{% endif %}
+
+<h2>Source health</h2>
+{% if unhealthy %}
+<p class="muted">{{ unhealthy|length }} source page(s) not confirmed reachable. Run the check on the Organisations page; confirm contact details on the live page before sending.</p>
+{% else %}<p class="good">All source pages reachable at last check.</p>{% endif %}
+
+<h2>Webinars</h2>
+{% if events %}
+<ul>{% for e in events %}<li><a href="{{ url_for('event', event_id=e.id) }}">{{ e.starts_at }}: {{ e.title }}</a> ({{ e.language }}, {{ e.cohort }})</li>{% endfor %}</ul>
+{% else %}<p class="muted">None scheduled.</p>{% endif %}
+{% endblock %}
