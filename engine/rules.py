@@ -161,7 +161,7 @@ def check_can_draft(conn, org, kind):
     if not org["contact_email"]:
         raise RuleViolation("No official contact email recorded for this organisation.")
     if kind == "invite" and org_already_invited(conn, org["id"], org["contact_email"]):
-        raise RuleViolation("Already invited once. Nobody is contacted twice.")
+        raise RuleViolation("Already emailed once. Nobody is contacted twice.")
     if kind == "reply" and not awaiting_our_reply(conn, org["id"]):
         raise RuleViolation("No new message from them to reply to.")
 

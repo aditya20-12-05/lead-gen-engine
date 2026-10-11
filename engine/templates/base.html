@@ -29,6 +29,9 @@
   label { display: block; margin: 8px 0 2px; font-size: 13px; color: var(--muted); }
   button { font: inherit; padding: 7px 14px; border: 0; border-radius: 4px; background: var(--accent); color: #fff; cursor: pointer; }
   button.secondary { background: #6b7385; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; background: #eef1f5; }
+  .pill.ready { background: #e8f4ec; color: var(--good); } .pill.waiting { background: #fff3d6; color: #8a5a00; } .pill.blocked { background: #fbeaea; color: var(--bad); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; } @media (max-width: 800px) { .two { grid-template-columns: 1fr; } }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
   .inline { display: inline; }
   pre { white-space: pre-wrap; background: #fafbfc; border: 1px solid var(--line); padding: 12px; }
@@ -37,11 +40,12 @@
 <body>
 <header>
   <strong>SELEQT OUTREACH</strong>
-  <a href="{{ url_for('dashboard') }}">Today</a>
+  <a href="{{ url_for('overview') }}">Countries</a>
   <a href="{{ url_for('organisations') }}">Organisations</a>
   <a href="{{ url_for('events') }}">Webinars</a>
   <a href="{{ url_for('enquiries') }}">Enquiries</a>
   <a href="{{ url_for('dnc') }}">Do not contact</a>
+  <span style="margin-left:auto" class="muted">{% if mail_user %}<span style="color:#cfe8d6">Mailbox: {{ mail_user }}</span>{% else %}<span style="color:#f3d0d0">Mailbox not connected</span>{% endif %}</span>
 </header>
 <main>
   {% for category, message in get_flashed_messages(with_categories=true) %}

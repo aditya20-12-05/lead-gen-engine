@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>{{ 'Invitation' if row.kind == 'invite' else 'Reply' }} to {{ org.name }}</h1>
+{% if row.task_id %}<p class="muted"><a href="{{ url_for('task', task_id=row.task_id) }}">Back to {{ org.name }}</a></p>{% endif %}
+<h1>{{ 'First email' if row.kind == 'invite' else 'Reply' }} to {{ org.name }}</h1>
 <p class="muted">To: {{ org.contact_email }} · drafted {{ row.drafted_at }}{% if row.sent_at %} · sent {{ row.sent_at }} by {{ row.sent_by }}{% endif %}</p>
 
 {% if needs_native_review %}<div class="flash error">Gujarati draft: have a native speaker review it before sending.</div>{% endif %}
@@ -18,13 +19,23 @@
 
 {% if not row.sent_at %}
 <div class="card">
-  <p><button type="button" class="secondary" onclick="navigator.clipboard.writeText(document.getElementById('subject').value)">Copy subject</button>
-     <button type="button" class="secondary" onclick="navigator.clipboard.writeText(document.getElementById('body').value)">Copy body</button>
-     <span class="muted">Send it yourself from the official mailbox, then record it here.</span></p>
-  <form method="post" action="{{ url_for('mark_sent', outreach_id=row.id) }}">
-    <label>Sent by</label><input name="sent_by" required>
-    <p><button>I have sent this</button></p>
+  {% if mail_user %}
+  <form method="post" action="{{ url_for('send', outreach_id=row.id) }}" onsubmit="return confirm('Send this email to {{ org.contact_email }} from {{ mail_user }}?')">
+    <label><input type="checkbox" name="reviewed" value="yes" style="width:auto"> I have read this email and it is ready to go</label>
+    <p><button>Send from {{ mail_user }}</button> <span class="muted">Save your edits first. Sending is blocked if any check above fails.</span></p>
   </form>
+  {% else %}
+  <p class="muted">The mailbox is not connected on this computer, so send it yourself and record it below.</p>
+  {% endif %}
+  <details>
+    <summary>Sent it personally from the mailbox instead?</summary>
+    <p><button type="button" class="secondary" onclick="navigator.clipboard.writeText(document.getElementById('subject').value)">Copy subject</button>
+       <button type="button" class="secondary" onclick="navigator.clipboard.writeText(document.getElementById('body').value)">Copy body</button></p>
+    <form method="post" action="{{ url_for('mark_sent', outreach_id=row.id) }}">
+      <label>Sent by</label><input name="sent_by" required>
+      <p><button class="secondary">Record as sent</button></p>
+    </form>
+  </details>
   <form method="post" action="{{ url_for('discard', outreach_id=row.id) }}" class="inline">
     <button class="secondary">Discard draft</button>
   </form>

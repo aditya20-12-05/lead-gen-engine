@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% from "_macros.html" import task_table %}
+{% block content %}
+<p class="muted"><a href="{{ url_for('overview') }}">Countries</a></p>
+<h1>{{ countries.get(code, code) }}</h1>
+
+{% for item in approaches %}
+<div class="card">
+  <h2 style="margin-top:0"><a href="{{ url_for('approach', approach_id=item.approach.id) }}">{{ item.approach.name }}</a>
+    <span class="pill">{{ item.approach.status }}</span></h2>
+  <p class="muted">{{ item.approach.our_brief.splitlines()[0] }}</p>
+  {{ task_table(item.tasks) }}
+</div>
+{% else %}
+<p class="muted">No approaches in {{ countries.get(code, code) }} yet.</p>
+{% endfor %}
+
+<h2>Add an approach</h2>
+<form method="post" class="card">
+  <div class="grid">
+    <div><label>Name</label><input name="name" placeholder="Weekly newspaper column" required></div>
+    <div><label>Status</label><select name="status"><option>active</option><option>planned</option><option>paused</option></select></div>
+    <div><label>Email template</label><select name="template_kind"><option value="">none (team writes each email)</option><option value="community">community body invitation</option><option value="employer">employer HR invitation</option></select></div>
+  </div>
+  <label>Our brief</label><textarea name="our_brief" style="min-height:160px" required></textarea>
+  <p><button>Add approach</button></p>
+</form>
+{% endblock %}

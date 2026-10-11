@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_pill %}
+{% block content %}
+<p class="muted"><a href="{{ url_for('overview') }}">Countries</a> / <a href="{{ url_for('country', code=t.country) }}">{{ countries.get(t.country, t.country) }}</a> / <a href="{{ url_for('approach', approach_id=t.approach_id) }}">{{ t.approach_name }}</a></p>
+<h1>{{ org.name }} {{ status_pill(status) }}</h1>
+
+<form method="post">
+<div class="two">
+  <div class="card">
+    <h2 style="margin-top:0">Them</h2>
+    <label>Official contact email</label><input name="contact_email" value="{{ org.contact_email or '' }}" placeholder="not found yet">
+    <label>Their brief</label><textarea name="source_note" style="min-height:140px">{{ org.source_note or '' }}</textarea>
+    <p class="muted">Source: <a href="{{ org.source_url }}" target="_blank" rel="noopener">{{ org.source_url }}</a><br>
+      Last check: <span class="{{ 'good' if (org.source_status or '').startswith('ok') else 'bad' }}">{{ org.source_status or 'not checked' }}</span> {{ org.source_checked_at or '' }}</p>
+  </div>
+  <div class="card">
+    <h2 style="margin-top:0">Us</h2>
+    <label>Our brief (<a href="{{ url_for('approach', approach_id=t.approach_id) }}">edit for the whole approach</a>)</label>
+    <pre style="max-height:220px; overflow:auto">{{ t.our_brief }}</pre>
+    <label>Plan for this organisation</label><textarea name="plan" style="min-height:80px">{{ t.plan or '' }}</textarea>
+    <label>Owner</label><input name="owner" value="{{ t.owner or '' }}">
+  </div>
+</div>
+<p><button class="secondary">Save</button></p>
+</form>
+
+<h2>Email thread</h2>
+{% if thread %}
+{% for m in thread %}
+<div class="card" style="{{ 'border-left: 4px solid #1f4e79' if m.dir == 'out' else 'border-left: 4px solid #8a5a00' }}">
+  <p class="muted">{{ 'SELEQT' if m.dir == 'out' else 'Them' }} · {{ m.at }}{% if m.dir == 'out' %} · {% if m.sent_at %}sent by {{ m.sent_by }}{% else %}<span class="bad">draft, not sent</span>{% endif %}{% endif %}</p>
+  {% if m.dir == 'out' %}<p><a href="{{ url_for('outreach', outreach_id=m.id) }}"><strong>{{ m.subject or '(no subject yet)' }}</strong></a></p>
+  {% else %}<p><strong>{{ m.subject }}</strong></p><pre>{{ m.body }}</pre>{% endif %}
+</div>
+{% endfor %}
+{% else %}<p class="muted">No emails yet.</p>{% endif %}
+
+<div class="card">
+  {% if status == 'ready' %}
+    <form method="post" action="{{ url_for('draft', task_id=t.id) }}">
+      <input type="hidden" name="kind" value="invite">
+      {% if templates %}
+        <label>Start the first email from</label>
+        <select name="language" style="width:auto">{% for lang, tpl in templates.items() %}<option value="{{ lang }}">{{ tpl.label }}</option>{% endfor %}</select>
+        <button name="template" value="template">Use template</button>
+        <button name="template" value="blank" class="secondary">Write from blank</button>
+      {% else %}
+        <button name="template" value="blank">Write the first email</button>
+        <span class="muted">The team member writes it from the brief.</span>
+      {% endif %}
+    </form>
+  {% elif status == 'reply waiting' %}
+    <form method="post" action="{{ url_for('draft', task_id=t.id) }}">
+      <input type="hidden" name="kind" value="reply">
+      <button>Write a reply</button>
+    </form>
+  {% elif status == 'needs email' %}
+    <p class="bad">Add their official email above before writing.</p>
+  {% elif status == 'do not contact' %}
+    <p class="bad">On the do-not-contact list. No emails can be written.</p>
+  {% elif status == 'sent, awaiting reply' %}
+    <p class="muted">Emailed once. We do not chase; the next step is theirs.</p>
+  {% endif %}
+  {% if mail_user %}
+  <form method="post" action="{{ url_for('check_mail') }}" style="margin-top:12px">
+    <input type="hidden" name="next" value="{{ url_for('task', task_id=t.id) }}">
+    <button class="secondary">Check for replies</button>
+  </form>
+  {% endif %}
+</div>
+
+<details class="card">
+  <summary>Log a reply that came another way (phone, WhatsApp, another inbox)</summary>
+  <form method="post" action="{{ url_for('log_inbound', org_id=org.id) }}">
+    <input type="hidden" name="task_id" value="{{ t.id }}">
+    <input type="hidden" name="next" value="{{ url_for('task', task_id=t.id) }}">
+    <label>Channel</label><select name="channel"><option>phone</option><option>whatsapp</option><option>email</option><option>in person</option></select>
+    <label>Their message</label><textarea name="body" style="min-height:100px"></textarea>
+    <p><button class="secondary">Log message</button></p>
+  </form>
+</details>
+{% endblock %}

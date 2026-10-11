@@ -21,6 +21,30 @@ CREATE TABLE IF NOT EXISTS organisations (
     UNIQUE (name, country)
 );
 
+-- Country > approach > task. An approach is a channel in one country (for
+-- example "Weekly newspaper column" in the UK) with SELEQT's brief for it.
+CREATE TABLE IF NOT EXISTS approaches (
+    id INTEGER PRIMARY KEY,
+    country TEXT NOT NULL,
+    name TEXT NOT NULL,
+    our_brief TEXT NOT NULL,
+    template_kind TEXT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('planned', 'active', 'paused')),
+    created_at TEXT NOT NULL,
+    UNIQUE (country, name)
+);
+
+-- One task per organisation within an approach.
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY,
+    approach_id INTEGER NOT NULL REFERENCES approaches (id),
+    org_id INTEGER NOT NULL REFERENCES organisations (id),
+    plan TEXT,
+    owner TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (approach_id, org_id)
+);
+
 CREATE TABLE IF NOT EXISTS outreach (
     id INTEGER PRIMARY KEY,
     org_id INTEGER NOT NULL REFERENCES organisations (id),
@@ -110,6 +134,27 @@ def connect(path):
     return conn
 
 
+# Columns added after the first release; added in place on older databases.
+MIGRATIONS = {
+    "outreach": {"task_id": "INTEGER REFERENCES tasks (id)", "message_id": "TEXT"},
+    "inbound": {
+        "task_id": "INTEGER REFERENCES tasks (id)",
+        "message_id": "TEXT",
+        "from_addr": "TEXT",
+        "subject": "TEXT",
+    },
+}
+
+
 def init(conn):
     conn.executescript(SCHEMA)
+    for table, columns in MIGRATIONS.items():
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS inbound_message_id ON inbound (message_id) "
+        "WHERE message_id IS NOT NULL"
+    )
     conn.commit()

@@ -1,54 +1,23 @@
 {% extends "base.html" %}
+{% from "_macros.html" import status_pill %}
 {% block content %}
 <h1>{{ org.name }}</h1>
 <p class="muted">{{ org.kind }} · {{ countries.get(org.country, org.country) }}{% if org.city %}, {{ org.city }}{% endif %}</p>
 {% if dnc %}<div class="flash error">Do not contact: {{ dnc }}</div>{% endif %}
 
-<div class="card">
-  <p><strong>Source:</strong> <a href="{{ org.source_url }}" target="_blank" rel="noopener">{{ org.source_url }}</a><br>
+<h2>Tasks</h2>
+<ul>{% for t in tasks %}<li><a href="{{ url_for('task', task_id=t.task_id) }}">{{ t.approach_name }}</a> {{ status_pill(t.status) }}</li>{% else %}<li class="muted">Not part of any approach yet.</li>{% endfor %}</ul>
+
+<form method="post" action="{{ url_for('edit_organisation', org_id=org.id) }}" class="card">
+  <p><strong>Source:</strong> <a href="{{ org.source_url }}" target="_blank" rel="noopener">{{ org.source_url }}</a>
   <span class="{{ 'good' if (org.source_status or '').startswith('ok') else 'bad' }}">{{ org.source_status or 'not checked' }}</span>
   <span class="muted">{{ org.source_checked_at or '' }}</span></p>
-  {% if org.source_note %}<p class="muted">{{ org.source_note }}</p>{% endif %}
-  <form method="post" action="{{ url_for('edit_organisation', org_id=org.id) }}">
-    <div class="grid">
-      <div><label>Official contact email</label><input name="contact_email" value="{{ org.contact_email or '' }}"></div>
-      <div><label>Website</label><input name="website" value="{{ org.website or '' }}"></div>
-    </div>
-    <label>Notes</label><input name="notes" value="{{ org.notes or '' }}">
-    <p><button class="secondary">Save details</button></p>
-  </form>
-</div>
-
-<h2>Draft a first invitation</h2>
-<form method="post" action="{{ url_for('draft', org_id=org.id) }}" class="card">
-  <input type="hidden" name="kind" value="invite">
-  <label>Template</label>
-  <select name="language">{% for lang, t in templates.items() %}<option value="{{ lang }}">{{ t.label }}</option>{% endfor %}</select>
-  <p><button>Create draft</button> <span class="muted">Blocked automatically if already invited, on the do-not-contact list, or missing an official email.</span></p>
-</form>
-
-<h2>Conversation</h2>
-{% if history %}
-<table>
-  <tr><th>When</th><th>Direction</th><th>Content</th></tr>
-  {% for h in history %}
-  <tr>
-    <td class="muted">{{ h.at }}</td>
-    <td>{{ 'Us' if h.dir == 'out' else 'Them' }} ({{ h.kind }}){% if h.dir == 'out' and not h.sent_at %} <span class="bad">draft</span>{% endif %}</td>
-    <td>{% if h.dir == 'out' %}<a href="{{ url_for('outreach', outreach_id=h.id) }}">{{ h.summary }}</a>{% else %}<pre>{{ h.summary }}</pre>{% endif %}</td>
-  </tr>
-  {% endfor %}
-</table>
-{% else %}<p class="muted">No contact yet.</p>{% endif %}
-
-<h2>Log a message they sent</h2>
-<form method="post" action="{{ url_for('log_inbound', org_id=org.id) }}" class="card">
-  <label>Channel</label><select name="channel"><option>email</option><option>phone</option><option>whatsapp</option><option>in person</option></select>
-  <label>Their message (paste it)</label><textarea name="body" style="min-height:120px"></textarea>
-  <p><button class="secondary">Log message</button></p>
-</form>
-<form method="post" action="{{ url_for('draft', org_id=org.id) }}">
-  <input type="hidden" name="kind" value="reply">
-  <button>Draft a reply</button> <span class="muted">Only possible after they have written to us.</span>
+  <div class="grid">
+    <div><label>Official contact email</label><input name="contact_email" value="{{ org.contact_email or '' }}"></div>
+    <div><label>Website</label><input name="website" value="{{ org.website or '' }}"></div>
+  </div>
+  <label>Their brief</label><textarea name="source_note" style="min-height:100px">{{ org.source_note or '' }}</textarea>
+  <label>Notes</label><input name="notes" value="{{ org.notes or '' }}">
+  <p><button class="secondary">Save details</button></p>
 </form>
 {% endblock %}
